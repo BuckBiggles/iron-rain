@@ -2,15 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Scorched Tanks</title>
 <style>
-  html,body{margin:0;height:100%;background:#07080d;overflow:hidden}
+  html,body{margin:0;height:100%;background:#07080d;overflow:hidden;overscroll-behavior:none}
   body{display:flex;align-items:center;justify-content:center}
-  canvas{width:min(100vw,calc(100vh * 1120 / 630));aspect-ratio:1120/630;display:block;box-shadow:0 0 60px #000}
+  canvas{width:min(100vw,calc(100vh * 1120 / 630));aspect-ratio:1120/630;display:block;box-shadow:0 0 60px #000;touch-action:none;user-select:none;-webkit-user-select:none}
+  #rot{display:none;position:fixed;top:10px;left:0;right:0;text-align:center;color:#fff;font:700 14px system-ui,sans-serif;text-shadow:0 1px 4px #000;pointer-events:none;z-index:5}
+  @media (orientation:portrait) and (max-width:700px){#rot{display:block}}
+  #codeIn{position:fixed;left:-200px;top:0;width:10px;height:10px;opacity:0}
 </style>
 </head>
 <body>
+<div id="rot">↻ Turn your phone sideways for a bigger view</div>
+<input id="codeIn" maxlength="5" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false">
 <canvas id="c" width="1120" height="630"></canvas>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
@@ -63,9 +68,11 @@ let wind = 0, turn = 0, state = 'aim', wins = [0, 0, 0, 0], winner = -1;
 let theme = THEMES[0], bgCanvas, texCanvas, clouds = [], stars = [], streaks = [], menuTanks = [];
 let numPlayers = 2, numHumans = 1, menuStage = 'home';
 let mode = 'menu', paused = false, assist = true, muted = false;
+const TURN_SECONDS = 45;
+let turnFrames = 0, turnLeft = 0;
 let net = null, netMsg = '', codeInput = '', evq = [], terrainDirty = false, themeIdx = 0, shotId = 0, copiedAt = -999;
 let shake = 0, whiteFlash = 0, T = 0, aiTimer = 0, aiPlan = null;
-let banner = null, wheel = null, menuButtons = [];
+let banner = null, wheel = null, menuButtons = [], uiButtons = [], touchMode = false;
 const keys = {}, mouse = {x: -1, y: -1};
 
 // ====================================================== audio (tiny synth)
@@ -213,6 +220,7 @@ function nextAlive(from) {
 function beginTurn(t) {
   turn = t; state = 'aim'; wind = Math.round(rnd(-10, 10));
   tanks[t].fuel = 60; aiPlan = null; aiTimer = 80;
+  turnFrames = net && !tanks[t].ai ? TURN_SECONDS * 60 : 0;   // online humans get a shot clock so nobody can stall the game
   emit({t: 'turn', i: t});
 }
 function pivot(t) {   // world position of the turret pivot, accounting for hull tilt
@@ -426,7 +434,7 @@ function humanControl(t) {
   const dir = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
   if (dir && t.fuel > 0) {
     const nx = clamp(t.x + dir * 0.8, 14, W - 14);
-    if (Math.abs(ground[Math.floor(nx)] - ground[Math.floor(t.x)]) < 2.5) {
+    if (nx !== t.x && Math.abs(ground[Math.floor(nx)] - ground[Math.floor(t.x)]) < 2.5) {
       t.x = nx; t.fuel -= 0.5;
       if (T % 4 === 0) addP({type: 'smoke', x: t.x - dir * 14, y: t.y + 3, vx: -dir * .4, vy: -.3, g: -.005, life: 25, size: 3, drag: .95});
     }
@@ -477,7 +485,12 @@ function updateGame() {
       }
     } else if (isMine(t)) humanControl(t);
     // (online: other players' angle/power/position arrive as 'in' messages)
+    if (turnFrames > 0 && --turnFrames === 0 && !t.ai) {
+      emit({t: 'pop', x: t.x, y: t.y - 72, s: 'TIME UP!', c: '#fca5a5', z: 20});
+      beginTurn(nextAlive(turn));
+    }
   }
+  turnLeft = turnFrames > 0 && state === 'aim' ? Math.ceil(turnFrames / 60) : 0;
 
   if (state === 'fly') {
     for (const s of shots) {
@@ -584,7 +597,7 @@ function onHostConn(conn) {
       conn.send({t: 'full', why: mode === 'play' ? 'That game has already started.' : 'That room is full.'});
       setTimeout(() => conn.close(), 400); return;
     }
-    net.occ[seat] = true; net.conns.push({conn, seat});
+    net.occ[seat] = true; net.conns.push({conn, seat, seen: performance.now()});
     conn.send({t: 'welcome', seat, np: numPlayers});
     bcast({t: 'lobby', np: numPlayers, occ: net.occ});
   });
@@ -600,12 +613,13 @@ function hostDrop(conn) {
     const t = tanks[seat];
     if (t && !t.ai) {
       t.ai = true; emit({t: 'pop', x: t.x, y: t.y - 72, s: 'DISCONNECTED → CPU', c: '#fff', z: 14});
-      if (state === 'aim' && turn === seat) { aiPlan = null; aiTimer = 60; }
+      if (state === 'aim' && turn === seat) { aiPlan = null; aiTimer = 60; turnFrames = 0; }
     }
   } else bcast({t: 'lobby', np: numPlayers, occ: net.occ});
 }
 function hostData(conn, d) {
   const c = net && net.conns.find(c => c.conn === conn);
+  if (c) c.seen = performance.now();
   if (!c || mode !== 'play' || !d) return;
   const t = tanks[c.seat];
   if ((d.t === 'in' || d.t === 'fire') && t && !t.ai && state === 'aim' && turn === c.seat) {
@@ -624,7 +638,7 @@ function netBroadcast() {
     k: tanks.map(t => [r1(t.x), r1(t.y), Math.round(t.hp), r1(t.angle), r1(t.power), t.weapon, r1(t.fuel),
                        t.special ? ALLW.indexOf(t.special) : -1, t.ammo.map(a => a === Infinity ? -1 : a)]),
     sh: shots.map(s => [s.id, r1(s.x), r1(s.y), Math.round(s.vx * 1000) / 1000, Math.round(s.vy * 1000) / 1000, ALLW.indexOf(s.w)]),
-    wh: wheel ? [wheel.t, wheel.idx, wheel.spin] : null};
+    wh: wheel ? [wheel.t, wheel.idx, wheel.spin] : null, tl: turnLeft};
   if (evq.length) { m.ev = evq; evq = []; }
   if (terrainDirty) { m.g = Array.from(ground, Math.round); terrainDirty = false; }
   bcast(m);
@@ -635,7 +649,7 @@ function joinRoom(code) {
   if (code.length < 4) { netMsg = 'Enter the room code your friend gave you.'; return; }
   if (!netReady()) { netMsg = 'Online play needs the PeerJS library — check your internet connection.'; return; }
   netMsg = 'Connecting…'; menuStage = 'connecting';
-  net = {role: 'client', code, seat: -1, status: 'connecting', peer: null, conn: null, occ: [], sent: false, sentAt: -999, lastIn: ''};
+  net = {role: 'client', code, seat: -1, status: 'connecting', peer: null, conn: null, occ: [], sent: false, sentAt: -999, lastIn: '', seen: performance.now()};
   let peer;
   try { peer = new Peer(); } catch (e) { leaveRoom('Could not start networking.'); menuStage = 'join'; return; }
   net.peer = peer;
@@ -650,8 +664,21 @@ function joinRoom(code) {
     conn.on('error', () => { if (net && net.conn === conn) leaveRoom('Connection error.'); });
   });
 }
+// heartbeat: browsers can take 30+ s to notice a vanished WebRTC peer, so we watch for silence ourselves
+function netTick() {
+  if (!net) return;
+  const now = performance.now();
+  if (now - (net.lastPing || 0) > 2000) {
+    net.lastPing = now;
+    try { if (net.role === 'host') bcast({t: 'ping'}); else if (net.conn && net.conn.open) net.conn.send({t: 'ping'}); } catch (e) {}
+  }
+  if (net.role === 'host') {
+    for (const c of [...net.conns]) if (now - c.seen > 10000) { hostDrop(c.conn); try { c.conn.close(); } catch (e) {} }
+  } else if (net.status === 'ready' && now - net.seen > 10000) leaveRoom('Lost connection to the host.');
+}
 function clientData(m) {
   if (!net || net.role !== 'client' || !m) return;
+  net.seen = performance.now();
   switch (m.t) {
     case 'welcome': net.seat = m.seat; net.status = 'ready'; numPlayers = m.np; net.occ = []; menuStage = 'lobby'; netMsg = ''; break;
     case 'full': fail2(m.why); break;
@@ -672,7 +699,7 @@ function startClientRound(m) {
 function applySnap(m) {
   if (mode !== 'play' || !tanks.length) return;
   const prevMine = state === 'aim' && turn === net.seat;
-  state = m.st; turn = m.tn; wind = m.w; winner = m.wn; wins = m.ws;
+  state = m.st; turn = m.tn; wind = m.w; winner = m.wn; wins = m.ws; turnLeft = m.tl || 0;
   const nowMine = state === 'aim' && turn === net.seat;
   if (state !== 'aim') net.sent = false;
   if (m.g) for (let x = 0; x < W; x++) ground[x] = m.g[x];
@@ -828,7 +855,10 @@ function drawAimHelpers(t) {
   ctx.restore();
   if (assist && !t.ai && isMine(t)) {
     const pts = previewPoints(t);
-    pts.forEach(([x, y], i) => { ctx.globalAlpha = 1 - i / pts.length * .85; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 2.2, 0, TAU); ctx.fill(); });
+    pts.forEach(([x, y], i) => {
+      ctx.globalAlpha = 1 - i / pts.length * .85; ctx.fillStyle = '#fff'; ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, 2.6, 0, TAU); ctx.stroke(); ctx.fill();
+    });
     ctx.globalAlpha = 1;
   }
 }
@@ -928,14 +958,14 @@ function drawCards() {
       g.addColorStop(0, shade(base, .35)); g.addColorStop(1, shade(base, -.15));
       rr(x + 52, y + 29, (cw - 104) * hp, 12, 6); ctx.fillStyle = g; ctx.fill();
     }
-    text(String(Math.max(0, Math.round(t.hp))), x + cw - 46, y + 36, 14, '#fff', 'left', '800');
+    text(String(Math.max(0, Math.round(t.hp))), x + cw - 46, y + 33, 13, '#fff', 'left', '800');
     text('★'.repeat(Math.min(wins[i], 6)) + (wins[i] > 6 ? ' ×' + wins[i] : '') || '', x + 52, y + 51, 12, '#fcd34d', 'left', '700');
     if (!wins[i]) text('no wins yet', x + 52, y + 51, 10.5, 'rgba(255,255,255,.35)', 'left', '600');
     if (t.special) {
       const pulse = 1 + Math.sin(T * .15) * .08;
       ctx.save(); glow(t.special.color, 14); ctx.fillStyle = t.special.color + '55';
-      ctx.beginPath(); ctx.arc(x + cw - 24, y + 47, 12 * pulse, 0, TAU); ctx.fill(); noGlow(); ctx.restore();
-      text(t.special.icon, x + cw - 24, y + 48, 15, '#fff', 'center');
+      ctx.beginPath(); ctx.arc(x + cw - 30, y + 50, 10 * pulse, 0, TAU); ctx.fill(); noGlow(); ctx.restore();
+      text(t.special.icon, x + cw - 30, y + 51, 13, '#fff', 'center');
     }
     ctx.restore();
   });
@@ -951,6 +981,11 @@ function drawWind() {
   if (wind) { rr(f > 0 ? mid : mid + f * half, y - 4, Math.abs(f) * half, 8, 4); ctx.fill(); }
   ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.fillRect(mid - 1, y - 7, 2, 14);
   text(wind === 0 ? 'calm' : (wind < 0 ? '◀ ' : '') + Math.abs(wind) + (wind > 0 ? ' ▶' : ''), cx + w / 2 - 12, y + 1, 12, '#fff', 'right', '800');
+  if (turnLeft > 0) {   // online shot clock
+    const low = turnLeft <= 10, px = cx + w / 2 + 10;
+    panel(px, y - h / 2, 66, h, 12, low ? '#ef4444' : 'rgba(255,255,255,.14)', low ? 2 : 1.5);
+    text('⏱ ' + turnLeft, px + 33, y + 1, 13, low ? '#fca5a5' : '#fff', 'center', '800');
+  }
 }
 
 function drawControlPanel() {
@@ -1008,10 +1043,39 @@ function drawControlPanel() {
   text(t.ai ? 'CPU' : mineT ? 'FIRE' : 'WAIT', 0, -6, 17, ready ? '#0b0d14' : 'rgba(255,255,255,.45)', 'center', '900');
   text(t.ai ? (state === 'aim' ? 'thinking…' : '') : mineT ? 'SPACE' : 'their turn', 0, 14, 10, ready ? 'rgba(0,0,0,.6)' : 'rgba(255,255,255,.4)', 'center', '800');
   ctx.restore();
+  // clickable / touchable regions (only for the tank this machine controls, while aiming)
+  if (ready) {
+    uiButtons.push({x: gx - gr - 6, y: gy - gr - 8, w: gr * 2 + 12, h: gr + 22, drag: (mx, my) => {
+      const a = Math.atan2(gy - my, mx - gx) * 180 / Math.PI;
+      t.angle = clamp(a < 0 ? (mx < gx ? 180 : 0) : a, 0, 180);
+    }});
+    uiButtons.push({x: px - 6, y: y0 + 22, w: pw + 12, h: 32, drag: mx => { t.power = clamp(Math.round((mx - px) / pw * 100), 5, 100); }});
+    WEAPONS.forEach((wp, i) => uiButtons.push({x: sx + i * 86, y: sy, w: sw2, h: sh, tap: () => { if (t.ammo[i] > 0) { t.weapon = i; sfx.click(); } }}));
+    uiButtons.push({x: fx, y: sy, w: 80, h: 60, tap: () => { if (state === 'aim') tryFire(); }});
+  }
+  if (ready && touchMode) drawTouchControls();
   // hint ribbon
   const room = net ? `ROOM ${net.code}  ·  ` : '';
   text(`${room}A/D move  ·  ←→ angle  ·  ↑↓ power (Shift = fine)  ·  1-3 weapon  ·  T aim assist: ${assist ? 'ON' : 'OFF'}  ·  M sound: ${muted ? 'OFF' : 'ON'}  ·  ${net ? '' : 'P pause  ·  '}Esc ${net ? 'leave' : 'menu'}`,
        W / 2, H - 7, 11, 'rgba(255,255,255,.55)', 'center', '600', 'rgba(0,0,0,.6)');
+}
+
+// on-screen hold-to-repeat buttons (shown after the first touch). They just press the matching keyboard key.
+function holdBtn(x, y, w, h, label, key, sub) {
+  uiButtons.push({x, y, w, h, hold: key});
+  const on = keys[key];
+  ctx.save(); ctx.globalAlpha = on ? .95 : .72;
+  rr(x, y, w, h, 14); ctx.fillStyle = on ? 'rgba(255,255,255,.4)' : 'rgba(10,12,24,.78)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+  text(label, x + w / 2, y + h / 2 - 5, 24, '#fff', 'center', '900');
+  text(sub, x + w / 2, y + h - 11, 9, 'rgba(255,255,255,.75)', 'center', '800');
+}
+function drawTouchControls() {
+  const y = H - 174, s = 58, g = 8;
+  holdBtn(14, y, s, s, '◀', 'a', 'DRIVE'); holdBtn(14 + s + g, y, s, s, '▶', 'd', 'DRIVE');
+  const rx = W - 14 - (s * 4 + g * 3);
+  holdBtn(rx, y, s, s, '◀', 'arrowleft', 'ANGLE'); holdBtn(rx + s + g, y, s, s, '▶', 'arrowright', 'ANGLE');
+  holdBtn(rx + (s + g) * 2, y, s, s, '▼', 'arrowdown', 'POWER'); holdBtn(rx + (s + g) * 3, y, s, s, '▲', 'arrowup', 'POWER');
 }
 
 function drawBanner() {
@@ -1239,6 +1303,7 @@ function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   if (mode === 'menu') { drawWorld(menuTanks); drawMenu(); return; }
   drawWorld(tanks);
+  uiButtons = [];
   drawCards(); drawWind(); drawControlPanel(); drawBanner();
   if (state === 'wheel' && wheel) drawWheel();
   if (state === 'over') drawOver();
@@ -1259,6 +1324,10 @@ function initMenuScene() {
 // ====================================================== input
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
+  if (e.target && e.target.id === 'codeIn') {               // soft-keyboard room-code field
+    if (k === 'enter') joinRoom(codeInput); else if (k === 'escape') { codeIn.blur(); menuStage = 'home'; netMsg = ''; }
+    return;
+  }
   keys[k] = true; audio();
   if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', ' ', 'backspace'].includes(k) && !(e.target && /INPUT|TEXTAREA/.test(e.target.tagName))) e.preventDefault();
   if (mode === 'menu' && menuStage === 'join') {            // typing a room code
@@ -1304,13 +1373,31 @@ addEventListener('paste', e => {
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 function toCanvas(e) { const r = cv.getBoundingClientRect(); return {x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height}; }
-cv.addEventListener('mousemove', e => Object.assign(mouse, toCanvas(e)));
-cv.addEventListener('mouseleave', () => { mouse.x = mouse.y = -1; });
-cv.addEventListener('mousedown', e => {
+const inRect = (p, b) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+const activePtr = new Map();
+const codeIn = document.getElementById('codeIn');
+codeIn.addEventListener('input', () => { codeInput = codeIn.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5); codeIn.value = codeInput; });
+cv.addEventListener('pointerdown', e => {
   audio(); Object.assign(mouse, toCanvas(e));
-  if (mode !== 'menu') return;
-  for (const b of menuButtons) if (mouse.x >= b.x && mouse.x <= b.x + b.w && mouse.y >= b.y && mouse.y <= b.y + b.h) { b.action(); break; }
+  if (e.pointerType === 'touch') touchMode = true;
+  if (mode === 'menu') {
+    if (menuStage === 'join' && inRect(mouse, {x: W / 2 - 190, y: 220, w: 380, h: 84})) { codeIn.value = codeInput; codeIn.focus(); return; }   // phones: bring up the keyboard
+    for (const b of menuButtons) if (inRect(mouse, b)) { b.action(); break; }
+    return;
+  }
+  for (const b of uiButtons) if (inRect(mouse, b)) {
+    e.preventDefault();
+    try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+    if (b.hold) { keys[b.hold] = true; activePtr.set(e.pointerId, b); }
+    else if (b.drag) { activePtr.set(e.pointerId, b); b.drag(mouse.x, mouse.y); }
+    else if (b.tap) b.tap();
+    break;
+  }
 });
+cv.addEventListener('pointermove', e => { Object.assign(mouse, toCanvas(e)); const b = activePtr.get(e.pointerId); if (b && b.drag) b.drag(mouse.x, mouse.y); });
+const ptrUp = e => { const b = activePtr.get(e.pointerId); if (b && b.hold) keys[b.hold] = false; activePtr.delete(e.pointerId); };
+cv.addEventListener('pointerup', ptrUp); cv.addEventListener('pointercancel', ptrUp);
+cv.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') { mouse.x = mouse.y = -1; } });
 
 initMenuScene();
 
@@ -1319,6 +1406,7 @@ initMenuScene();
 let lastTick = performance.now(), acc = 0;
 function tick() {
   const now = performance.now(); acc += Math.min(250, now - lastTick); lastTick = now;
+  netTick();
   for (let n = 0; acc >= 1000 / 60 && n < 8; n++, acc -= 1000 / 60) update();
 }
 try {
