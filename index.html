@@ -12,6 +12,7 @@
 </head>
 <body>
 <canvas id="c" width="1120" height="630"></canvas>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
@@ -42,6 +43,7 @@ const SPECIALS = [
 ];
 const CHILD = {name:'Child', color:'#ffd0a0', radius:26, damage:35, shots:1, kind:'child'};
 const COLORS = ['#4ade80', '#f87171', '#60a5fa', '#facc15'];
+const ALLW = [...WEAPONS, ...SPECIALS, CHILD];   // index = id used on the wire
 
 const THEMES = [
   {name:'Day', sky:['#3f94f2', '#9ad4ff', '#ffe8b5'], sun:{x:.78, y:.2, r:30, c:'#fffbe0', glow:'rgba(255,244,190,.85)'}, stars:0,
@@ -59,8 +61,9 @@ let ground, tanks = [], shots = [], parts = [], rings = [], flashes = [], popups
 let pending = [], hit = [false, false, false, false];
 let wind = 0, turn = 0, state = 'aim', wins = [0, 0, 0, 0], winner = -1;
 let theme = THEMES[0], bgCanvas, texCanvas, clouds = [], stars = [], streaks = [], menuTanks = [];
-let numPlayers = 2, numHumans = 1, menuStage = 'count';
+let numPlayers = 2, numHumans = 1, menuStage = 'home';
 let mode = 'menu', paused = false, assist = true, muted = false;
+let net = null, netMsg = '', codeInput = '', evq = [], terrainDirty = false, themeIdx = 0, shotId = 0, copiedAt = -999;
 let shake = 0, whiteFlash = 0, T = 0, aiTimer = 0, aiPlan = null;
 let banner = null, wheel = null, menuButtons = [];
 const keys = {}, mouse = {x: -1, y: -1};
@@ -169,9 +172,10 @@ function renderTex() {
   return c;
 }
 
-function makeScene() {
-  theme = pick(THEMES);
-  makeTerrain();
+function makeScene(forceTheme, gdata) {
+  themeIdx = forceTheme != null ? forceTheme : Math.floor(Math.random() * THEMES.length);
+  theme = THEMES[themeIdx];
+  if (gdata) ground = Float32Array.from(gdata); else makeTerrain();
   bgCanvas = renderBG();
   if (!texCanvas) texCanvas = renderTex();
   scorches = [];
@@ -188,17 +192,20 @@ function tiltAt(x) {
 function newTank(i) {
   const slot = W / numPlayers, x = slot * i + rnd(slot * 0.25, slot * 0.75);
   return {i, x, y: ground[Math.floor(x)] - 4, hp: 100, shownHp: 100, angle: x < W / 2 ? 55 : 125, power: 55, weapon: 0,
-          ammo: WEAPONS.map(w => w.ammo), fuel: 60, color: COLORS[i], vy: 0, special: null, ai: i >= numHumans,
+          ammo: WEAPONS.map(w => w.ammo), fuel: 60, color: COLORS[i], vy: 0, special: null, ai: net ? !net.occ[i] : i >= numHumans,
           tilt: tiltAt(x), recoil: 0, dead: false};
 }
 function startRound() {
   makeScene();
   tanks = Array.from({length: numPlayers}, (_, i) => newTank(i));
-  shots = []; parts = []; rings = []; flashes = []; popups = []; pending = []; wheel = null; winner = -1;
-  hit = [false, false, false, false]; shake = 0; whiteFlash = 0; paused = false;
-  beginTurn(Math.floor(Math.random() * numPlayers));
+  shots = []; parts = []; rings = []; flashes = []; popups = []; pending = []; wheel = null; winner = -1; evq = [];
+  hit = [false, false, false, false]; shake = 0; whiteFlash = 0; paused = false; terrainDirty = false;
   mode = 'play';
+  if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, Math.round), np: numPlayers, ai: tanks.map(t => t.ai)});
+  beginTurn(Math.floor(Math.random() * numPlayers));
 }
+// who controls a tank on this machine? (offline hot-seat: everyone; online: only your own seat)
+const isMine = t => !net || t.i === net.seat;
 function nextAlive(from) {
   for (let k = 1; k <= numPlayers; k++) { const n = (from + k) % numPlayers; if (tanks[n].hp > 0) return n; }
   return from;
@@ -206,7 +213,7 @@ function nextAlive(from) {
 function beginTurn(t) {
   turn = t; state = 'aim'; wind = Math.round(rnd(-10, 10));
   tanks[t].fuel = 60; aiPlan = null; aiTimer = 80;
-  banner = {t: 0, text: `PLAYER ${t + 1}'S TURN`, sub: tanks[t].ai ? 'CPU' : 'YOUR SHOT', color: tanks[t].color};
+  emit({t: 'turn', i: t});
 }
 function pivot(t) {   // world position of the turret pivot, accounting for hull tilt
   return {x: t.x + 19 * Math.sin(t.tilt), y: t.y + 4 - 19 * Math.cos(t.tilt)};
@@ -272,14 +279,50 @@ function fire() {
   const m = muzzle(t), v = t.power * POWER_SCALE;
   for (let k = 0; k < w.shots; k++) {
     const a = (t.angle + (k - (w.shots - 1) / 2) * 7) * Math.PI / 180;
-    shots.push({x: m.x, y: m.y, vx: Math.cos(a) * v, vy: -Math.sin(a) * v, w, owner: turn, trail: [],
+    shots.push({id: ++shotId, x: m.x, y: m.y, vx: Math.cos(a) * v, vy: -Math.sin(a) * v, w, owner: turn, trail: [],
                 bounces: w.kind === 'bounce' ? 3 : 0, split: w.kind === 'mirv'});
   }
-  t.recoil = 8; shake = Math.max(shake, 3);
-  burst(m.x, m.y, 10, {type: 'fire', s0: .5, s1: 3, l0: 8, l1: 16, z0: 3, z1: 6, drag: .9});
-  burst(m.x, m.y, 8, {type: 'smoke', s0: .2, s1: 1, l0: 30, l1: 50, z0: 4, z1: 7, drag: .96, g: -.02});
-  sfx.fire();
+  emit({t: 'fire', i: turn});
   state = 'fly';
+}
+
+// ---- events: visual/audio happenings. The host emits them (and also sends them to clients); everyone plays them locally.
+function emit(e) { applyEvent(e); if (net && net.role === 'host') evq.push(e); }
+function applyEvent(e) {
+  switch (e.t) {
+    case 'turn': {
+      const t = tanks[e.i]; if (!t) return;
+      banner = {t: 0, text: `PLAYER ${e.i + 1}'S TURN`, color: t.color,
+                sub: t.ai ? 'CPU' : (net ? (isMine(t) ? 'YOUR SHOT' : 'ONLINE PLAYER') : 'YOUR SHOT')};
+      if (net && isMine(t) && !t.ai) sfx.prize();
+      break;
+    }
+    case 'fire': {
+      const t = tanks[e.i]; if (!t) return;
+      const m = muzzle(t);
+      t.recoil = 8; shake = Math.max(shake, 3);
+      burst(m.x, m.y, 10, {type: 'fire', s0: .5, s1: 3, l0: 8, l1: 16, z0: 3, z1: 6, drag: .9});
+      burst(m.x, m.y, 8, {type: 'smoke', s0: .2, s1: 1, l0: 30, l1: 50, z0: 4, z1: 7, drag: .96, g: -.02});
+      sfx.fire(); break;
+    }
+    case 'boom': scorches.push({x: e.x, y: e.y, r: e.r * 1.5}); if (scorches.length > 40) scorches.shift(); explosionFx(e.x, e.y, e.r); break;
+    case 'bang': explosionFx(e.x, e.y, e.r); break;
+    case 'dirt': {
+      for (let i = 0; i < 50; i++) addP({type: 'dirt', x: e.x + rnd(-e.r, e.r), y: e.y - rnd(0, e.r), vx: rnd(-1.5, 1.5), vy: rnd(-3, 0), g: .1, life: rnd(30, 60), size: rnd(2, 5), color: pick(theme.dirt)});
+      rings.push({x: e.x, y: e.y, r0: 8, r1: e.r * 1.5, life: 20, max: 20, color: 'rgba(210,160,90,1)', w: 3});
+      shake = Math.max(shake, 4); sfx.boom(20); break;
+    }
+    case 'warp': {
+      rings.push({x: e.x, y: e.y, r0: 6, r1: 46, life: 22, max: 22, color: 'rgba(94,234,212,1)', w: 3});
+      rings.push({x: e.x, y: e.y, r0: 2, r1: 28, life: 16, max: 16, color: 'rgba(255,255,255,1)', w: 2});
+      burst(e.x, e.y, 28, {type: 'spark', s0: 1, s1: 4, l0: 20, l1: 40, z0: 1.5, z1: 2.5, drag: .96, g: -.02, up: -1});
+      break;
+    }
+    case 'ring': rings.push({x: e.x, y: e.y, r0: e.r0, r1: e.r1, life: e.life, max: e.life, color: e.color, w: e.w}); break;
+    case 'pop': popup(e.x, e.y, e.s, e.c, e.z); break;
+    case 'conf': confetti(e.x, e.y, e.n, e.sp); break;
+    case 'sfx': sfx[e.n] && sfx[e.n](); break;
+  }
 }
 
 function explode(x, y, w, owner) {
@@ -288,44 +331,38 @@ function explode(x, y, w, owner) {
       const dy = Math.sqrt(Math.max(0, w.radius * w.radius - (px - x) ** 2));
       if (ground[px] > y - dy) ground[px] = Math.max(60, y - dy);
     }
-    for (let i = 0; i < 50; i++) addP({type: 'dirt', x: x + rnd(-w.radius, w.radius), y: y - rnd(0, w.radius), vx: rnd(-1.5, 1.5), vy: rnd(-3, 0), g: .1, life: rnd(30, 60), size: rnd(2, 5), color: pick(theme.dirt)});
-    rings.push({x, y, r0: 8, r1: w.radius * 1.5, life: 20, max: 20, color: 'rgba(210,160,90,1)', w: 3});
-    shake = Math.max(shake, 4); sfx.boom(20);
+    terrainDirty = true;
+    emit({t: 'dirt', x, y, r: w.radius});
     return;
   }
   if (w.kind === 'teleport') {
     const t = tanks[owner], nx = clamp(x, 16, W - 16);
-    const warp = (px, py) => {
-      rings.push({x: px, y: py, r0: 6, r1: 46, life: 22, max: 22, color: 'rgba(94,234,212,1)', w: 3});
-      rings.push({x: px, y: py, r0: 2, r1: 28, life: 16, max: 16, color: 'rgba(255,255,255,1)', w: 2});
-      burst(px, py, 28, {type: 'spark', s0: 1, s1: 4, l0: 20, l1: 40, z0: 1.5, z1: 2.5, drag: .96, g: -.02, up: -1});
-    };
-    warp(t.x, t.y - 8);
+    emit({t: 'warp', x: t.x, y: t.y - 8});
     t.x = nx; t.y = ground[Math.floor(nx)] - 4; t.vy = 0; t.tilt = tiltAt(nx);
-    warp(t.x, t.y - 8);
-    popup(t.x, t.y - 56, 'WARP!', '#5eead4', 22);
-    sfx.prize();
+    emit({t: 'warp', x: t.x, y: t.y - 8});
+    emit({t: 'pop', x: t.x, y: t.y - 56, s: 'WARP!', c: '#5eead4', z: 22});
+    emit({t: 'sfx', n: 'prize'});
     return;
   }
   if (w.kind === 'air') {
-    for (let i = 0; i < 6; i++) pending.push({x: x + (i - 2.5) * 38, y: -20 - i * 25, vx: 0, vy: 3, w: CHILD, owner, trail: [], bounces: 0});
+    for (let i = 0; i < 6; i++) pending.push({id: ++shotId, x: x + (i - 2.5) * 38, y: -20 - i * 25, vx: 0, vy: 3, w: CHILD, owner, trail: [], bounces: 0});
   }
   crater(x, y, w.radius);
-  scorches.push({x, y, r: w.radius * 1.5}); if (scorches.length > 40) scorches.shift();
-  explosionFx(x, y, w.radius, w.color);
+  terrainDirty = true;
+  emit({t: 'boom', x, y, r: w.radius});
   let dealt = 0;
   for (const t of tanks) {
     const d = Math.hypot(t.x - x, t.y - 8 - y);
     if (t.hp > 0 && d < w.radius + 14) {
       const dmg = Math.round(w.damage * (1 - Math.max(0, d - 14) / w.radius));
       if (dmg <= 0) continue;
-      t.hp -= dmg; popup(t.x, t.y - 56, '-' + dmg, '#ff6b5e', 22 + dmg / 8);
-      if (t.i !== owner) { hit[owner] = true; dealt += dmg; sfx.hit(); }
+      t.hp -= dmg; emit({t: 'pop', x: t.x, y: t.y - 56, s: '-' + dmg, c: '#ff6b5e', z: 22 + dmg / 8});
+      if (t.i !== owner) { hit[owner] = true; dealt += dmg; emit({t: 'sfx', n: 'hit'}); }
     }
   }
   if (w.kind === 'vamp' && dealt) {
     const o = tanks[owner]; o.hp = Math.min(100, o.hp + dealt);
-    popup(o.x, o.y - 56, '+' + dealt, '#a3e635', 22);
+    emit({t: 'pop', x: o.x, y: o.y - 56, s: '+' + dealt, c: '#a3e635', z: 22});
   }
 }
 
@@ -371,7 +408,38 @@ function aiThink(t) {
 }
 
 // ====================================================== update
+// per-frame cosmetic tank state (health bar easing, recoil, hull tilt, damage smoke) — runs on every machine
+function tankCosmetics(t) {
+  t.shownHp += (Math.max(0, t.hp) - t.shownHp) * .12;
+  t.recoil *= .84;
+  t.tilt = lerp(t.tilt, tiltAt(t.x), .2);
+  if (t.dead && T % 5 === 0) addP({type: 'smoke', x: t.x + rnd(-8, 8), y: t.y - 10, vx: rnd(-.2, .2), vy: -rnd(.5, 1.2), g: -.01, life: rnd(50, 90), size: rnd(5, 9), drag: .98});
+  else if (!t.dead && t.hp < 35 && T % 9 === 0) addP({type: 'smoke', x: t.x + rnd(-8, 8), y: t.y - 12, vx: rnd(-.2, .2), vy: -rnd(.4, 1), g: -.01, life: rnd(40, 70), size: rnd(3, 6), drag: .98});
+}
+// keyboard aiming/driving for a human-controlled tank on THIS machine
+function humanControl(t) {
+  const fine = keys['shift'] ? 0.2 : 1;
+  if (keys['arrowleft'])  t.angle = Math.min(180, t.angle + fine);
+  if (keys['arrowright']) t.angle = Math.max(0, t.angle - fine);
+  if (keys['arrowup'])    t.power = Math.min(100, t.power + fine * 0.6);
+  if (keys['arrowdown'])  t.power = Math.max(5, t.power - fine * 0.6);
+  const dir = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
+  if (dir && t.fuel > 0) {
+    const nx = clamp(t.x + dir * 0.8, 14, W - 14);
+    if (Math.abs(ground[Math.floor(nx)] - ground[Math.floor(t.x)]) < 2.5) {
+      t.x = nx; t.fuel -= 0.5;
+      if (T % 4 === 0) addP({type: 'smoke', x: t.x - dir * 14, y: t.y + 3, vx: -dir * .4, vy: -.3, g: -.005, life: 25, size: 3, drag: .95});
+    }
+  }
+}
+
 function update() {
+  if (net && net.role === 'client' && mode === 'play') { updateClient(); return; }
+  updateGame();
+  if (net && net.role === 'host' && mode === 'play' && (T & 1) === 0) netBroadcast();
+}
+
+function updateGame() {
   updateFx();
   if (mode === 'menu') {
     for (const t of menuTanks) { t.angle = 90 + Math.sin(T * .02 + t.i * 1.7) * 55; t.recoil *= .85; }
@@ -380,24 +448,20 @@ function update() {
   if (paused) return;
 
   for (const t of tanks) {
-    t.shownHp += (Math.max(0, t.hp) - t.shownHp) * .12;
-    t.recoil *= .84;
-    t.tilt = lerp(t.tilt, tiltAt(t.x), .2);
+    tankCosmetics(t);
     const gy = ground[clamp(Math.floor(t.x), 0, W - 1)] - 4;
     if (t.y < gy) {
       t.vy += G; t.y = Math.min(gy, t.y + t.vy);
       if (t.y >= gy) {
-        if (t.vy > 4 && t.hp > 0) { const d = Math.round((t.vy - 4) * 6); t.hp -= d; popup(t.x, t.y - 50, '-' + d, '#ffb347', 18); }
+        if (t.vy > 4 && t.hp > 0) { const d = Math.round((t.vy - 4) * 6); t.hp -= d; emit({t: 'pop', x: t.x, y: t.y - 50, s: '-' + d, c: '#ffb347', z: 18}); }
         t.vy = 0;
       }
     } else { t.y = gy; t.vy = 0; }
     if (t.hp <= 0 && !t.dead) {
       t.dead = true; t.hp = 0;
-      explosionFx(t.x, t.y - 8, 42, t.color);
-      popup(t.x, t.y - 60, 'DESTROYED', '#fff', 20);
+      emit({t: 'bang', x: t.x, y: t.y - 8, r: 42});
+      emit({t: 'pop', x: t.x, y: t.y - 60, s: 'DESTROYED', c: '#fff', z: 20});
     }
-    if (t.dead && T % 5 === 0) addP({type: 'smoke', x: t.x + rnd(-8, 8), y: t.y - 10, vx: rnd(-.2, .2), vy: -rnd(.5, 1.2), g: -.01, life: rnd(50, 90), size: rnd(5, 9), drag: .98});
-    else if (!t.dead && t.hp < 35 && T % 9 === 0) addP({type: 'smoke', x: t.x + rnd(-8, 8), y: t.y - 12, vx: rnd(-.2, .2), vy: -rnd(.4, 1), g: -.01, life: rnd(40, 70), size: rnd(3, 6), drag: .98});
   }
 
   if (state === 'aim') {
@@ -411,21 +475,8 @@ function update() {
           if (Math.abs(aiPlan.a - t.angle) < .1 && Math.abs(aiPlan.p - t.power) < .1) fire();
         }
       }
-    } else {
-      const fine = keys['shift'] ? 0.2 : 1;
-      if (keys['arrowleft'])  t.angle = Math.min(180, t.angle + fine);
-      if (keys['arrowright']) t.angle = Math.max(0, t.angle - fine);
-      if (keys['arrowup'])    t.power = Math.min(100, t.power + fine * 0.6);
-      if (keys['arrowdown'])  t.power = Math.max(5, t.power - fine * 0.6);
-      const dir = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
-      if (dir && t.fuel > 0) {
-        const nx = clamp(t.x + dir * 0.8, 14, W - 14);
-        if (Math.abs(ground[Math.floor(nx)] - ground[Math.floor(t.x)]) < 2.5) {
-          t.x = nx; t.fuel -= 0.5;
-          if (T % 4 === 0) addP({type: 'smoke', x: t.x - dir * 14, y: t.y + 3, vx: -dir * .4, vy: -.3, g: -.005, life: 25, size: 3, drag: .95});
-        }
-      }
-    }
+    } else if (isMine(t)) humanControl(t);
+    // (online: other players' angle/power/position arrive as 'in' messages)
   }
 
   if (state === 'fly') {
@@ -435,8 +486,8 @@ function update() {
       if (T % 2 === 0) addP({type: 'smoke', x: s.x, y: s.y, vx: rnd(-.1, .1), vy: rnd(-.1, .1), life: 26, size: 2.5, drag: .98});
       if (s.split && s.vy > 0) {   // MIRV splits at the top of its arc
         s.dead = true;
-        rings.push({x: s.x, y: s.y, r0: 4, r1: 30, life: 14, max: 14, color: 'rgba(255,200,80,1)', w: 2});
-        for (let k = -2; k <= 2; k++) pending.push({x: s.x, y: s.y, vx: s.vx + k * 0.9, vy: s.vy, w: CHILD, owner: s.owner, trail: [], bounces: 0});
+        emit({t: 'ring', x: s.x, y: s.y, r0: 4, r1: 30, life: 14, color: 'rgba(255,200,80,1)', w: 2});
+        for (let k = -2; k <= 2; k++) pending.push({id: ++shotId, x: s.x, y: s.y, vx: s.vx + k * 0.9, vy: s.vy, w: CHILD, owner: s.owner, trail: [], bounces: 0});
         continue;
       }
       const onGround = s.x >= 0 && s.x < W && s.y >= 0 && s.y >= ground[Math.floor(s.x)];
@@ -455,14 +506,10 @@ function update() {
   }
 
   if (state === 'wheel') {
-    const prev = wheel.t++;
-    const step = TAU / SPECIALS.length, slice = R => Math.floor((((-R) % TAU) + TAU) % TAU / step);
-    const R0 = wheelAngle(prev), R1 = wheelAngle(wheel.t);
-    if (slice(R0) !== slice(R1) && wheel.t < wheel.spin) { sfx.tick(); wheel.flick = 1; }
-    wheel.flick *= .85;
+    wheelTicks();
     if (wheel.t === wheel.spin) {
       tanks[turn].special = SPECIALS[wheel.idx];
-      confetti(W / 2, H / 2, 90, 7); sfx.prize();
+      emit({t: 'conf', x: W / 2, y: H / 2, n: 90, sp: 7}); emit({t: 'sfx', n: 'prize'});
     }
     if (wheel.t > wheel.spin + 130) { wheel = null; beginTurn(nextAlive(turn)); }
   }
@@ -474,7 +521,7 @@ function update() {
       if (alive.length <= 1) {
         state = 'over';
         winner = alive.length ? alive[0].i : -1;
-        if (winner >= 0) { wins[winner]++; confetti(W / 2, H * .3, 140, 8); sfx.win(); }
+        if (winner >= 0) { wins[winner]++; emit({t: 'conf', x: W / 2, y: H * .3, n: 140, sp: 8}); emit({t: 'sfx', n: 'win'}); }
       } else if (hit[turn] && tanks[turn].hp > 0) {
         hit = [false, false, false, false];
         wheel = {t: 0, spin: 210, idx: Math.floor(Math.random() * SPECIALS.length), flick: 0};
@@ -484,9 +531,199 @@ function update() {
   }
   if (state === 'over' && T % 6 === 0 && winner >= 0) confetti(rnd(0, W), -10, 3, 2);
 }
+function wheelTicks() {   // shared by host and clients: spin animation + tick sounds
+  const prev = wheel.t++;
+  const step = TAU / SPECIALS.length, slice = R => Math.floor((((-R) % TAU) + TAU) % TAU / step);
+  if (slice(wheelAngle(prev)) !== slice(wheelAngle(wheel.t)) && wheel.t < wheel.spin) { sfx.tick(); wheel.flick = 1; }
+  wheel.flick *= .85;
+}
 function wheelAngle(t) {
   const step = TAU / SPECIALS.length, p = Math.min(1, t / wheel.spin);
   return (TAU * 6 - (wheel.idx + .5) * step) * (1 - Math.pow(1 - p, 4));
+}
+
+// ====================================================== networking (WebRTC via PeerJS; host-authoritative)
+// The host runs the whole game and streams snapshots (30 Hz) + one-shot events to everyone.
+// Clients only send their own aim/fire inputs. No game server needed — PeerJS's free broker just introduces peers.
+const ROOM_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+const netReady = () => typeof Peer !== 'undefined';
+const r1 = v => Math.round(v * 10) / 10;
+function genCode() { let s = ''; for (let i = 0; i < 5; i++) s += ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)]; return s; }
+function inviteLink() { return location.href.split(/[?#]/)[0] + '?room=' + net.code; }
+function bcast(m) { if (net && net.role === 'host') for (const c of net.conns) if (c.conn.open) { try { c.conn.send(m); } catch (e) {} } }
+
+function leaveRoom(msg) {
+  const n = net; net = null; netMsg = msg || '';
+  if (n) { try { (n.conns || []).forEach(c => c.conn.close()); if (n.conn) n.conn.close(); if (n.peer) n.peer.destroy(); } catch (e) {} }
+  if (mode === 'play') { mode = 'menu'; }
+  shots = []; tanks = []; wheel = null; banner = null; evq = [];
+  initMenuScene(); menuStage = 'home';
+}
+
+function hostRoom(n) {
+  if (!netReady()) { netMsg = 'Online play needs the PeerJS library — check your internet connection.'; return; }
+  numPlayers = n; netMsg = '';
+  net = {role: 'host', code: genCode(), seat: 0, conns: [], occ: [true, false, false, false], status: 'opening', peer: null};
+  menuStage = 'lobby';
+  let peer;
+  try { peer = new Peer('scorched-' + net.code); } catch (e) { leaveRoom('Could not start networking.'); return; }
+  net.peer = peer;
+  peer.on('open', () => { if (net && net.peer === peer) net.status = 'ready'; });
+  peer.on('error', e => {
+    if (!net || net.peer !== peer) return;
+    if (e.type === 'unavailable-id') { leaveRoom(); hostRoom(n); return; }
+    leaveRoom('Network error (' + e.type + '). Please try again.');
+  });
+  peer.on('connection', onHostConn);
+}
+function onHostConn(conn) {
+  conn.on('open', () => {
+    if (!net || net.role !== 'host') { conn.close(); return; }
+    const seat = net.occ.findIndex((o, i) => i < numPlayers && !o);
+    if (mode === 'play' || seat < 0) {
+      conn.send({t: 'full', why: mode === 'play' ? 'That game has already started.' : 'That room is full.'});
+      setTimeout(() => conn.close(), 400); return;
+    }
+    net.occ[seat] = true; net.conns.push({conn, seat});
+    conn.send({t: 'welcome', seat, np: numPlayers});
+    bcast({t: 'lobby', np: numPlayers, occ: net.occ});
+  });
+  conn.on('data', d => hostData(conn, d));
+  conn.on('close', () => hostDrop(conn));
+  conn.on('error', () => hostDrop(conn));
+}
+function hostDrop(conn) {
+  if (!net || net.role !== 'host') return;
+  const i = net.conns.findIndex(c => c.conn === conn); if (i < 0) return;
+  const seat = net.conns[i].seat; net.conns.splice(i, 1); net.occ[seat] = false;
+  if (mode === 'play') {
+    const t = tanks[seat];
+    if (t && !t.ai) {
+      t.ai = true; emit({t: 'pop', x: t.x, y: t.y - 72, s: 'DISCONNECTED → CPU', c: '#fff', z: 14});
+      if (state === 'aim' && turn === seat) { aiPlan = null; aiTimer = 60; }
+    }
+  } else bcast({t: 'lobby', np: numPlayers, occ: net.occ});
+}
+function hostData(conn, d) {
+  const c = net && net.conns.find(c => c.conn === conn);
+  if (!c || mode !== 'play' || !d) return;
+  const t = tanks[c.seat];
+  if ((d.t === 'in' || d.t === 'fire') && t && !t.ai && state === 'aim' && turn === c.seat) {
+    t.angle = clamp(+d.a || 0, 0, 180); t.power = clamp(+d.p || 0, 5, 100);
+    if (d.w >= 0 && d.w <= 2 && t.ammo[d.w | 0] > 0) t.weapon = d.w | 0;
+    const dx = clamp((+d.x) - t.x, -30, 30);
+    if (dx && t.fuel > 0) {
+      const nx = clamp(t.x + dx, 14, W - 14), cost = Math.abs(nx - t.x) / 0.8 * 0.5;
+      if (cost <= t.fuel + 0.01) { t.fuel -= cost; t.x = nx; }
+    }
+    if (d.t === 'fire') fire();
+  }
+}
+function netBroadcast() {
+  const m = {t: 's', st: state, tn: turn, w: wind, wn: winner, ws: wins,
+    k: tanks.map(t => [r1(t.x), r1(t.y), Math.round(t.hp), r1(t.angle), r1(t.power), t.weapon, r1(t.fuel),
+                       t.special ? ALLW.indexOf(t.special) : -1, t.ammo.map(a => a === Infinity ? -1 : a)]),
+    sh: shots.map(s => [s.id, r1(s.x), r1(s.y), Math.round(s.vx * 1000) / 1000, Math.round(s.vy * 1000) / 1000, ALLW.indexOf(s.w)]),
+    wh: wheel ? [wheel.t, wheel.idx, wheel.spin] : null};
+  if (evq.length) { m.ev = evq; evq = []; }
+  if (terrainDirty) { m.g = Array.from(ground, Math.round); terrainDirty = false; }
+  bcast(m);
+}
+
+function joinRoom(code) {
+  code = (code || '').toUpperCase().trim();
+  if (code.length < 4) { netMsg = 'Enter the room code your friend gave you.'; return; }
+  if (!netReady()) { netMsg = 'Online play needs the PeerJS library — check your internet connection.'; return; }
+  netMsg = 'Connecting…'; menuStage = 'connecting';
+  net = {role: 'client', code, seat: -1, status: 'connecting', peer: null, conn: null, occ: [], sent: false, sentAt: -999, lastIn: ''};
+  let peer;
+  try { peer = new Peer(); } catch (e) { leaveRoom('Could not start networking.'); menuStage = 'join'; return; }
+  net.peer = peer;
+  const fail = msg => { if (net && net.peer === peer) { leaveRoom(msg); menuStage = 'join'; } };
+  const timer = setTimeout(() => { if (net && net.peer === peer && net.status !== 'ready') fail('Could not reach that room. Check the code and try again.'); }, 15000);
+  peer.on('error', e => { clearTimeout(timer); fail(e.type === 'peer-unavailable' ? 'Room not found — check the code.' : 'Network error (' + e.type + ').'); });
+  peer.on('open', () => {
+    const conn = peer.connect('scorched-' + code, {reliable: true, serialization: 'json'});
+    net.conn = conn;
+    conn.on('data', clientData);
+    conn.on('close', () => { if (net && net.conn === conn) leaveRoom('Disconnected from the host.'); });
+    conn.on('error', () => { if (net && net.conn === conn) leaveRoom('Connection error.'); });
+  });
+}
+function clientData(m) {
+  if (!net || net.role !== 'client' || !m) return;
+  switch (m.t) {
+    case 'welcome': net.seat = m.seat; net.status = 'ready'; numPlayers = m.np; net.occ = []; menuStage = 'lobby'; netMsg = ''; break;
+    case 'full': fail2(m.why); break;
+    case 'lobby': net.occ = m.occ; numPlayers = m.np; break;
+    case 'round': startClientRound(m); break;
+    case 's': applySnap(m); break;
+  }
+}
+function fail2(msg) { leaveRoom(msg || 'Could not join.'); menuStage = 'join'; }
+
+function startClientRound(m) {
+  numPlayers = m.np; makeScene(m.th, m.g);
+  tanks = m.ai.map((ai, i) => ({i, x: 0, y: 0, tx: 0, ty: 0, ta: 55, tp: 55, init: false, hp: 100, shownHp: 100, angle: 55, power: 55,
+    weapon: 0, ammo: [Infinity, 3, 3], fuel: 60, color: COLORS[i], vy: 0, special: null, ai, tilt: 0, recoil: 0, dead: false}));
+  shots = []; parts = []; rings = []; flashes = []; popups = []; wheel = null; winner = -1; banner = null;
+  shake = 0; whiteFlash = 0; state = 'aim'; turn = 0; mode = 'play'; net.sent = false;
+}
+function applySnap(m) {
+  if (mode !== 'play' || !tanks.length) return;
+  const prevMine = state === 'aim' && turn === net.seat;
+  state = m.st; turn = m.tn; wind = m.w; winner = m.wn; wins = m.ws;
+  const nowMine = state === 'aim' && turn === net.seat;
+  if (state !== 'aim') net.sent = false;
+  if (m.g) for (let x = 0; x < W; x++) ground[x] = m.g[x];
+  if (m.ev) for (const e of m.ev) applyEvent(e);
+  m.k.forEach((a, i) => {
+    const t = tanks[i]; if (!t) return;
+    t.hp = a[2]; t.special = a[7] >= 0 ? ALLW[a[7]] : null; t.ammo = a[8].map(v => v < 0 ? Infinity : v); t.dead = t.hp <= 0;
+    const mineNow = nowMine && i === net.seat;
+    if (mineNow && prevMine) return;           // while you're aiming, your local values are the truth
+    t.tx = a[0]; t.ty = a[1]; t.ta = a[3]; t.tp = a[4]; t.weapon = a[5]; t.fuel = a[6];
+    if (!t.init || mineNow) { t.x = t.tx; t.y = t.ty; t.angle = t.ta; t.power = t.tp; t.init = true; t.tilt = tiltAt(t.x); }
+  });
+  const seen = new Set();
+  for (const a of m.sh) {
+    seen.add(a[0]);
+    let s = shots.find(q => q.id === a[0]);
+    if (!s) { s = {id: a[0], trail: [], w: ALLW[a[5]]}; shots.push(s); }
+    s.x = a[1]; s.y = a[2]; s.vx = a[3]; s.vy = a[4];
+  }
+  shots = shots.filter(s => seen.has(s.id));
+  if (state === 'wheel' && m.wh) {
+    if (!wheel) wheel = {t: m.wh[0], idx: m.wh[1], spin: m.wh[2], flick: 0};
+    else if (Math.abs(wheel.t - m.wh[0]) > 4) wheel.t = m.wh[0];
+  } else if (state !== 'wheel') wheel = null;
+}
+function updateClient() {
+  updateFx();
+  if (!tanks.length) return;
+  const mine = state === 'aim' && turn === net.seat;
+  for (const t of tanks) {
+    if (mine && t.i === net.seat) { humanControl(t); t.y = ground[clamp(Math.floor(t.x), 0, W - 1)] - 4; }
+    else if (t.init) { t.x = lerp(t.x, t.tx, .5); t.y = lerp(t.y, t.ty, .5); t.angle = lerp(t.angle, t.ta, .4); t.power = lerp(t.power, t.tp, .4); }
+    tankCosmetics(t);
+  }
+  for (const s of shots) {
+    s.vx += wind * WIND_SCALE; s.vy += G; s.x += s.vx; s.y += s.vy;
+    s.trail.push([s.x, s.y]); if (s.trail.length > 36) s.trail.shift();
+    if (T % 2 === 0) addP({type: 'smoke', x: s.x, y: s.y, vx: rnd(-.1, .1), vy: rnd(-.1, .1), life: 26, size: 2.5, drag: .98});
+  }
+  if (wheel && state === 'wheel') wheelTicks();
+  if (mine && T % 4 === 0) {
+    const t = tanks[net.seat], sig = [r1(t.angle), r1(t.power), t.weapon, r1(t.x)].join();
+    if (sig !== net.lastIn && net.conn.open) { net.lastIn = sig; net.conn.send({t: 'in', a: t.angle, p: t.power, w: t.weapon, x: t.x}); }
+  }
+}
+function tryFire() {
+  if (net && net.role === 'client') {
+    const t = tanks[net.seat];
+    if (!t || state !== 'aim' || turn !== net.seat || T - net.sentAt < 60) return;
+    net.sentAt = T; net.conn.send({t: 'fire', a: t.angle, p: t.power, w: t.weapon, x: t.x});
+  } else fire();
 }
 
 // ====================================================== drawing: world
@@ -589,7 +826,7 @@ function drawAimHelpers(t) {
   ctx.setLineDash([6, 6]); ctx.lineDashOffset = -T * .5; ctx.strokeStyle = t.color; ctx.lineWidth = 2; ctx.globalAlpha = .8;
   ctx.beginPath(); ctx.moveTo(p.x + Math.cos(a) * 30, p.y - Math.sin(a) * 30); ctx.lineTo(p.x + Math.cos(a) * len, p.y - Math.sin(a) * len); ctx.stroke();
   ctx.restore();
-  if (assist && !t.ai) {
+  if (assist && !t.ai && isMine(t)) {
     const pts = previewPoints(t);
     pts.forEach(([x, y], i) => { ctx.globalAlpha = 1 - i / pts.length * .85; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 2.2, 0, TAU); ctx.fill(); });
     ctx.globalAlpha = 1;
@@ -680,7 +917,8 @@ function drawCards() {
     ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth = 2; ctx.stroke();
     text(t.hp <= 0 ? '☠' : 'P' + (i + 1), x + 26, y + 32, t.hp <= 0 ? 18 : 15, '#0b0d14', 'center', '900');
     text('PLAYER ' + (i + 1), x + 52, y + 17, 13, '#fff', 'left', '800');
-    text(t.ai ? 'CPU' : 'HUMAN', x + cw - 12, y + 17, 11, 'rgba(255,255,255,.5)', 'right', '700');
+    const you = net && i === net.seat;
+    text(t.ai ? 'CPU' : you ? 'YOU' : 'HUMAN', x + cw - 12, y + 17, 11, you ? t.color : 'rgba(255,255,255,.5)', 'right', you ? '900' : '700');
     // hp
     rr(x + 52, y + 29, cw - 104, 12, 6); ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fill();
     const hp = clamp(t.shownHp / 100, 0, 1);
@@ -762,15 +1000,17 @@ function drawControlPanel() {
   if (sp) { text(sp.icon, x3 + 48, sy + 24, 22, '#fff', 'center'); text(sp.name, x3 + 48, sy + 46, 11, '#fff', 'center', '800'); text('PRIZE', x3 + 8, sy + 10, 9, sp.color, 'left', '800'); }
   else { text('PRIZE', x3 + 48, sy + 22, 11, 'rgba(255,255,255,.3)', 'center', '800'); text('hit to spin', x3 + 48, sy + 42, 10, 'rgba(255,255,255,.3)', 'center'); }
   // fire button
-  const fx = x + w - 92, ready = state === 'aim' && !t.ai, p = ready ? 1 + Math.sin(T * .12) * .03 : 1;
+  const mineT = isMine(t) && !t.ai;
+  const fx = x + w - 92, ready = state === 'aim' && mineT, p = ready ? 1 + Math.sin(T * .12) * .03 : 1;
   ctx.save(); ctx.translate(fx + 40, sy + 30); ctx.scale(p, p);
   if (ready) glow(col, 14);
   rr(-40, -30, 80, 60, 12); ctx.fillStyle = ready ? col : 'rgba(255,255,255,.08)'; ctx.fill(); noGlow();
-  text(t.ai ? 'CPU' : 'FIRE', 0, -6, 17, ready ? '#0b0d14' : 'rgba(255,255,255,.45)', 'center', '900');
-  text(t.ai ? (state === 'aim' ? 'thinking…' : '') : 'SPACE', 0, 14, 10, ready ? 'rgba(0,0,0,.6)' : 'rgba(255,255,255,.4)', 'center', '800');
+  text(t.ai ? 'CPU' : mineT ? 'FIRE' : 'WAIT', 0, -6, 17, ready ? '#0b0d14' : 'rgba(255,255,255,.45)', 'center', '900');
+  text(t.ai ? (state === 'aim' ? 'thinking…' : '') : mineT ? 'SPACE' : 'their turn', 0, 14, 10, ready ? 'rgba(0,0,0,.6)' : 'rgba(255,255,255,.4)', 'center', '800');
   ctx.restore();
   // hint ribbon
-  text(`A/D move  ·  ←→ angle  ·  ↑↓ power (Shift = fine)  ·  1-3 weapon  ·  T aim assist: ${assist ? 'ON' : 'OFF'}  ·  M sound: ${muted ? 'OFF' : 'ON'}  ·  P pause  ·  Esc menu`,
+  const room = net ? `ROOM ${net.code}  ·  ` : '';
+  text(`${room}A/D move  ·  ←→ angle  ·  ↑↓ power (Shift = fine)  ·  1-3 weapon  ·  T aim assist: ${assist ? 'ON' : 'OFF'}  ·  M sound: ${muted ? 'OFF' : 'ON'}  ·  ${net ? '' : 'P pause  ·  '}Esc ${net ? 'leave' : 'menu'}`,
        W / 2, H - 7, 11, 'rgba(255,255,255,.55)', 'center', '600', 'rgba(0,0,0,.6)');
 }
 
@@ -848,7 +1088,9 @@ function drawOver() {
     text(`P${i + 1}`, x - 24, 317, 11, '#0b0d14', 'center', '900');
     text('★ ' + wins[i], x + 4, 317, 17, '#fcd34d', 'left', '800');
   });
-  text('ENTER  next round     ·     ESC  main menu', W / 2, 395, 16, '#fff', 'center', '700', 'rgba(0,0,0,.6)');
+  const hint = net && net.role === 'client' ? 'Waiting for the host to start the next round…     ·     ESC  leave'
+    : `ENTER  next round     ·     ESC  ${net ? 'close room' : 'main menu'}`;
+  text(hint, W / 2, 395, 16, '#fff', 'center', '700', 'rgba(0,0,0,.6)');
   drawParts();
 }
 
@@ -867,8 +1109,76 @@ function button(x, y, w, h, big, sub, key, color, action) {
   return hov;
 }
 
+function smallBtn(x, y, w, h, label, color, action, filled) {
+  const hov = mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h;
+  menuButtons.push({x, y, w, h, action});
+  ctx.save(); if (hov || filled) glow(color, hov ? 22 : 12);
+  rr(x, y, w, h, 12); ctx.fillStyle = filled ? color : hov ? 'rgba(255,255,255,.22)' : 'rgba(255,255,255,.1)'; ctx.fill();
+  ctx.strokeStyle = hov ? color : 'rgba(255,255,255,.3)'; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+  text(label, x + w / 2, y + h / 2 + 1, 16, filled ? '#0b0d14' : '#fff', 'center', '900');
+  return hov;
+}
 function pickCount(n) { numPlayers = n; menuStage = 'humans'; sfx.click(); }
 function pickHumans(n) { numHumans = n; wins = [0, 0, 0, 0]; sfx.click(); startRound(); }
+function startOnline() { if (!net || net.role !== 'host' || net.status !== 'ready') return; wins = [0, 0, 0, 0]; sfx.click(); startRound(); }
+function copyInvite() {
+  const link = inviteLink();
+  const done = () => { copiedAt = T; };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(link).then(done, () => window.prompt('Copy this invite link:', link));
+  else window.prompt('Copy this invite link:', link);
+}
+
+function drawLobby() {
+  const host = net && net.role === 'host';
+  text(host ? 'YOUR ROOM' : 'ROOM LOBBY', W / 2, 188, 16, '#fff', 'center', '800', 'rgba(0,0,0,.5)');
+  panel(W / 2 - 190, 206, 380, 78, 16, '#facc15', 2);
+  try { ctx.letterSpacing = '10px'; } catch (e) {}
+  text(net.code, W / 2 + 5, 246, 54, '#fff', 'center', '900');
+  try { ctx.letterSpacing = '0px'; } catch (e) {}
+  const status = host && net.status !== 'ready' ? 'Opening room…' : host ? 'Share the code or the invite link with your friends' : 'Connected — waiting for the host to start';
+  text(status, W / 2, 298, 13, 'rgba(255,255,255,.75)', 'center', '700', 'rgba(0,0,0,.5)');
+  for (let i = 0; i < numPlayers; i++) {
+    const y = 316 + i * 50, taken = net.occ[i], me = i === net.seat;
+    panel(W / 2 - 260, y, 520, 42, 12, me ? COLORS[i] : 'rgba(255,255,255,.14)', me ? 2 : 1.2);
+    ctx.fillStyle = COLORS[i]; ctx.beginPath(); ctx.arc(W / 2 - 232, y + 21, 14, 0, TAU); ctx.fill();
+    text('P' + (i + 1), W / 2 - 232, y + 22, 13, '#0b0d14', 'center', '900');
+    text('PLAYER ' + (i + 1), W / 2 - 205, y + 21, 15, '#fff', 'left', '800');
+    const label = i === 0 ? (host ? 'HOST — you' : 'HOST') : taken ? (me ? 'YOU' : 'CONNECTED') : 'Open slot  ·  CPU if left empty';
+    text(label, W / 2 + 244, y + 22, 13, taken ? (me ? COLORS[i] : '#86efac') : 'rgba(255,255,255,.4)', 'right', taken ? '800' : '600');
+  }
+  const by = 316 + numPlayers * 50 + 6;
+  if (host) {
+    const copied = T - copiedAt < 120;
+    smallBtn(W / 2 - 260, by, 250, 46, copied ? '✓ LINK COPIED' : '🔗 COPY INVITE LINK', '#60a5fa', copyInvite, false);
+    smallBtn(W / 2 + 10, by, 250, 46, net.status === 'ready' ? '▶ START GAME' : 'OPENING…', '#4ade80', startOnline, net.status === 'ready');
+    text('Empty slots will be filled by CPU tanks.   Esc closes the room.', W / 2, by + 66, 12, 'rgba(255,255,255,.55)', 'center', '600', 'rgba(0,0,0,.5)');
+  } else {
+    smallBtn(W / 2 - 80, by, 160, 46, 'LEAVE', '#f87171', () => leaveRoom(), false);
+  }
+}
+
+function drawOnlineMenus() {
+  let any = false;
+  if (menuStage === 'join') {
+    text('ENTER ROOM CODE', W / 2, 198, 16, '#fff', 'center', '800', 'rgba(0,0,0,.5)');
+    panel(W / 2 - 190, 220, 380, 84, 16, '#60a5fa', 2);
+    try { ctx.letterSpacing = '10px'; } catch (e) {}
+    text(codeInput + (Math.floor(T / 30) % 2 ? '_' : ' '), W / 2 + 5, 262, 54, '#fff', 'center', '900');
+    try { ctx.letterSpacing = '0px'; } catch (e) {}
+    if (smallBtn(W / 2 - 190, 322, 185, 46, 'JOIN', '#4ade80', () => joinRoom(codeInput), codeInput.length >= 4)) any = true;
+    if (smallBtn(W / 2 + 5, 322, 185, 46, 'BACK', '#fff', () => { menuStage = 'home'; netMsg = ''; sfx.click(); }, false)) any = true;
+    text('Type the code, or just open the invite link your friend sent you.', W / 2, 400, 13, 'rgba(255,255,255,.7)', 'center', '700', 'rgba(0,0,0,.5)');
+  } else if (menuStage === 'connecting') {
+    text(`CONNECTING TO ROOM ${net ? net.code : ''}…`, W / 2, 250, 24, '#fff', 'center', '900', 'rgba(0,0,0,.6)');
+    text('(this can take a few seconds)', W / 2, 284, 13, 'rgba(255,255,255,.7)', 'center', '600');
+    if (smallBtn(W / 2 - 80, 320, 160, 46, 'CANCEL', '#f87171', () => leaveRoom(), false)) any = true;
+  } else if (menuStage === 'lobby' && net) {
+    drawLobby(); any = true;
+  }
+  if (netMsg && menuStage !== 'lobby') text(netMsg, W / 2, menuStage === 'join' ? 436 : 190, 14, '#fca5a5', 'center', '800', 'rgba(0,0,0,.6)');
+  cv.style.cursor = any ? 'pointer' : 'default';
+  drawParts();
+}
 
 function drawMenu() {
   menuButtons = [];
@@ -880,12 +1190,24 @@ function drawMenu() {
   ctx.lineWidth = 12; ctx.strokeStyle = 'rgba(30,8,8,.9)'; ctx.lineJoin = 'round'; ctx.strokeText('SCORCHED TANKS', W / 2, 92);
   ctx.save(); glow('rgba(255,120,40,.7)', 30); ctx.fillStyle = tg; ctx.fillText('SCORCHED TANKS', W / 2, 92); ctx.restore();
   try { ctx.letterSpacing = '0px'; } catch (e) {}
-  text('ARTILLERY  ·  DESTRUCTIBLE TERRAIN  ·  PRIZE WHEEL  ·  2–4 PLAYERS', W / 2, 142, 14, 'rgba(255,255,255,.85)', 'center', '800', 'rgba(0,0,0,.5)');
+  text('ARTILLERY  ·  DESTRUCTIBLE TERRAIN  ·  PRIZE WHEEL  ·  ONLINE MULTIPLAYER', W / 2, 142, 14, 'rgba(255,255,255,.85)', 'center', '800', 'rgba(0,0,0,.5)');
 
+  if (['join', 'connecting', 'lobby'].includes(menuStage)) { drawOnlineMenus(); return; }
   let any = false;
-  if (menuStage === 'count') {
-    text('CHOOSE BATTLE SIZE', W / 2, 198, 16, '#fff', 'center', '800', 'rgba(0,0,0,.5)');
-    [2, 3, 4].forEach((n, i) => { if (button(W / 2 - 300 + i * 205, 218, 190, 96, n + '', n + ' TANKS', n, COLORS[i + 1], () => pickCount(n))) any = true; });
+  if (menuStage === 'home') {
+    text('HOW DO YOU WANT TO PLAY?', W / 2, 198, 16, '#fff', 'center', '800', 'rgba(0,0,0,.5)');
+    const opts = [
+      ['LOCAL', 'Same screen · friends + CPUs', '1', () => { menuStage = 'count'; sfx.click(); }],
+      ['HOST', 'Create a room for online friends', '2', () => { menuStage = 'hostcount'; sfx.click(); }],
+      ['JOIN', 'Enter a room code', '3', () => { codeInput = ''; netMsg = ''; menuStage = 'join'; sfx.click(); }]];
+    opts.forEach(([big, sub, key, act], i) => { if (button(W / 2 - 480 + i * 330, 218, 300, 100, big, sub, key, COLORS[i], act)) any = true; });
+    if (netMsg) text(netMsg, W / 2, 346, 14, '#fca5a5', 'center', '800', 'rgba(0,0,0,.6)');
+  } else if (menuStage === 'count' || menuStage === 'hostcount') {
+    const online = menuStage === 'hostcount';
+    text(online ? 'HOW MANY TANKS IN THE ROOM?  (friends take the open seats, CPUs fill the rest)' : 'CHOOSE BATTLE SIZE', W / 2, 198, 16, '#fff', 'center', '800', 'rgba(0,0,0,.5)');
+    [2, 3, 4].forEach((n, i) => { if (button(W / 2 - 300 + i * 205, 218, 190, 96, n + '', n + ' TANKS', n, COLORS[i + 1], () => online ? (sfx.click(), hostRoom(n)) : pickCount(n))) any = true; });
+    if (button(W / 2 - 60, 326, 120, 34, '◀', '', 'Esc', '#fff', () => { menuStage = 'home'; sfx.click(); })) any = true;
+    if (netMsg) text(netMsg, W / 2, 384, 14, '#fca5a5', 'center', '800', 'rgba(0,0,0,.6)');
   } else {
     text(`${numPlayers} TANKS — HOW MANY HUMANS?`, W / 2, 198, 16, '#fff', 'center', '800', 'rgba(0,0,0,.5)');
     const opts = Array.from({length: numPlayers + 1}, (_, i) => i), bw = 150, gap = 14, x0 = W / 2 - (opts.length * bw + (opts.length - 1) * gap) / 2;
@@ -938,25 +1260,46 @@ function initMenuScene() {
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   keys[k] = true; audio();
-  if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', ' '].includes(k)) e.preventDefault();
+  if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', ' ', 'backspace'].includes(k) && !(e.target && /INPUT|TEXTAREA/.test(e.target.tagName))) e.preventDefault();
+  if (mode === 'menu' && menuStage === 'join') {            // typing a room code
+    if (k === 'escape') { menuStage = 'home'; netMsg = ''; }
+    else if (k === 'enter') joinRoom(codeInput);
+    else if (k === 'backspace') codeInput = codeInput.slice(0, -1);
+    else if (/^[a-z0-9]$/.test(k) && !e.ctrlKey && !e.metaKey && codeInput.length < 5) codeInput += k.toUpperCase();
+    return;
+  }
   if (k === 'm') { muted = !muted; return; }
   if (mode === 'menu') {
     const n = parseInt(e.key);
-    if (menuStage === 'count') { if (n >= 2 && n <= 4) pickCount(n); }
-    else if (k === 'escape' || k === 'backspace') { menuStage = 'count'; }
-    else if (n >= 0 && n <= numPlayers) pickHumans(n);
+    if (k === 'escape' || k === 'backspace') {
+      if (menuStage === 'lobby' || menuStage === 'connecting') leaveRoom();
+      else menuStage = menuStage === 'humans' ? 'count' : 'home';
+      netMsg = ''; return;
+    }
+    if (menuStage === 'home') { if (n === 1) menuStage = 'count'; else if (n === 2) menuStage = 'hostcount'; else if (n === 3) { codeInput = ''; netMsg = ''; menuStage = 'join'; } }
+    else if (menuStage === 'count') { if (n >= 2 && n <= 4) pickCount(n); }
+    else if (menuStage === 'hostcount') { if (n >= 2 && n <= 4) hostRoom(n); }
+    else if (menuStage === 'humans') { if (n >= 0 && n <= numPlayers) pickHumans(n); }
+    else if (menuStage === 'lobby' && k === 'enter') startOnline();
     return;
   }
-  if (k === 'escape') { mode = 'menu'; menuStage = 'count'; initMenuScene(); return; }
-  if (k === 'p' && state !== 'over') { paused = !paused; return; }
+  if (k === 'escape') { if (net) leaveRoom(); else { mode = 'menu'; menuStage = 'home'; initMenuScene(); } return; }
+  if (k === 'p' && state !== 'over' && !net) { paused = !paused; return; }
   if (k === 't') { assist = !assist; return; }
-  if (state === 'over' && k === 'enter') { startRound(); return; }
-  if (paused) return;
-  if (state === 'aim' && !tanks[turn].ai) {
-    if (k === ' ' && !e.repeat) fire();
+  if (state === 'over' && k === 'enter' && (!net || net.role === 'host')) { startRound(); return; }
+  if (paused || !tanks.length) return;
+  const t = tanks[turn];
+  if (state === 'aim' && !t.ai && isMine(t)) {
+    if (k === ' ' && !e.repeat) tryFire();
     const n = '123'.indexOf(k);
-    if (n >= 0 && k.length === 1 && tanks[turn].ammo[n] > 0) { tanks[turn].weapon = n; sfx.click(); }
+    if (n >= 0 && k.length === 1 && t.ammo[n] > 0) { t.weapon = n; sfx.click(); }
   }
+});
+addEventListener('paste', e => {
+  if (mode !== 'menu' || menuStage !== 'join') return;
+  const s = (e.clipboardData && e.clipboardData.getData('text')) || '';
+  const m = s.match(/room=([A-Za-z0-9]{4,6})/) || s.match(/^\s*([A-Za-z0-9]{4,6})\s*$/);
+  if (m) codeInput = m[1].toUpperCase().slice(0, 5);
 });
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -970,7 +1313,25 @@ cv.addEventListener('mousedown', e => {
 });
 
 initMenuScene();
-(function loop() { update(); draw(); requestAnimationFrame(loop); })();
+
+// Fixed 60 Hz simulation, driven by a Web Worker timer so the host keeps running even when its tab is in the
+// background (browsers throttle normal timers/rAF in hidden tabs, which would freeze everyone else's game).
+let lastTick = performance.now(), acc = 0;
+function tick() {
+  const now = performance.now(); acc += Math.min(250, now - lastTick); lastTick = now;
+  for (let n = 0; acc >= 1000 / 60 && n < 8; n++, acc -= 1000 / 60) update();
+}
+try {
+  const wk = new Worker(URL.createObjectURL(new Blob(['setInterval(()=>postMessage(0),8)'], {type: 'text/javascript'})));
+  wk.onmessage = tick;
+} catch (e) { setInterval(tick, 8); }
+(function frame() { draw(); requestAnimationFrame(frame); })();
+
+// invite links look like  .../?room=ABCDE
+(function () {
+  const m = location.search.match(/[?&]room=([A-Za-z0-9]{4,6})/);
+  if (m) { codeInput = m[1].toUpperCase().slice(0, 5); setTimeout(() => joinRoom(codeInput), 400); }
+})();
 </script>
 </body>
 </html>
