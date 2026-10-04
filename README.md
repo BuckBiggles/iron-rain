@@ -21,7 +21,7 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
   tank on top goes down with it, while the aliens escape in a flying saucer. Drills and orbital strikes collapse them at once
 - No wind: shells fly on gravity alone. Four weapons: Missile, Big Bomb, Triple, and the **Drill** (2 per round), which bores straight
   through the earth to hit a tank behind a hill, burst out the far side, or break into a cavern and collapse it
-- Land a hit, then type A, S, D, F in the random order shown, within 3 seconds, to spin the supply-drop wheel. Prizes go into your **stockpile** — keep as many as 8 and press **Q** (or click SUPPLY) to arm one when you want it:
+- Land a hit, then type W, A, S, D in the random order shown, within 3 seconds, to spin the supply-drop wheel. Prizes go into your **stockpile** — keep as many as 8 and press **Q** (or click SUPPLY) to arm one when you want it:
   Nuke, MIRV, Dirt Bomb, Bouncer, **Lucky 7** (seven shells in a tight group), Teleport, Vampire, **Orbital Strike** (satellite laser),
   and four status shells that last through the victim's next turn: **Incendiary** (burning: 15 damage when it starts),
   **Cryo** (frozen: can't aim or drive), **Acid** (corroded: takes 50% more damage), **EMP** (shorted: half power)
@@ -51,7 +51,7 @@ The control panel and a controls + ammo card sit in a strip below the battlefiel
 | Q | Arm the next special from your supply stockpile (press again to cycle, past the last = none) |
 | Space | Fire |
 | Enter / E | After your shot: end your turn (or just drive until the fuel runs out) |
-| A S D F | After a hit: press the 4 keys shown (A, S, D, F in a random order) within 3 s |
+| W A S D | After a hit: press the 4 keys shown (W, A, S, D in a random order) within 3 s |
 | T / M / P | Aim assist / sound / pause (offline only) |
 | Armory | ←/→ tank, ↑/↓ colour, Enter ready, Tab next player (hot-seat) — or click |
 | Esc | Menu / leave room |

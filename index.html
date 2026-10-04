@@ -137,7 +137,7 @@ let wind = 0, turn = 0, state = 'aim', wins = [0, 0, 0, 0], winner = -1;
 let theme = THEMES[0], bgCanvas, texCanvas, vigCanvas, clouds = [], stars = [], streaks = [], menuTanks = [];
 let numPlayers = 2, numHumans = 1, menuStage = 'home';
 let mode = 'menu', paused = false, assist = true, muted = false;
-const TURN_SECONDS = 45, QTE_FRAMES = 180;   // 3-second combo after a hit: A, S, D, F in a random order
+const TURN_SECONDS = 45, QTE_FRAMES = 180;   // 3-second combo after a hit: W, A, S, D in a random order
 let qte = null;
 const shuffled = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 let turnFrames = 0, turnLeft = 0;
@@ -1612,8 +1612,8 @@ function updateGame() {
 // ---- hit -> key combo -> prize wheel
 let lastCombo = '';
 function startQuick() {
-  let seq;   // A, S, D, F in a fresh random order every time: never plain "ASDF", never the same as last time
-  do seq = shuffled(['a', 's', 'd', 'f']); while (seq.join('') === 'asdf' || seq.join('') === lastCombo);
+  let seq;   // W, A, S, D in a fresh random order every time: never plain "WASD", never the same as last time
+  do seq = shuffled(['w', 'a', 's', 'd']); while (seq.join('') === 'wasd' || seq.join('') === lastCombo);
   lastCombo = seq.join('');
   qte = {seq, idx: 0, t: 0, limit: QTE_FRAMES + (net ? 12 : 0), done: false, ok: false, resT: 0, msg: '', ai: null};  // a little grace for network lag
   state = 'quick';
@@ -2413,7 +2413,7 @@ function drawInfoCard() {
   panel(x, y, w, h, 10);
   // controls (two rows of key chips)
   const rows = [[['← →', 'Aim'], ['↑ ↓', 'Power'], ['Shift', 'Fine'], ['A D', 'Drive'], ['1-4', 'Weapon'], ['Space', 'Fire']],
-                [['A S D F', 'Auth code'], ['Q', 'Supply'], ['Enter', 'End turn'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
+                [['W A S D', 'Auth code'], ['Q', 'Supply'], ['Enter', 'End turn'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
   rows.forEach((row, r) => {
     let cx = x + 12; const cy = y + 14 + r * 20;
     for (const [k, d] of row) {
@@ -3126,8 +3126,8 @@ addEventListener('keydown', e => {
   if (state === 'over' && k === 'enter' && (!net || net.role === 'host')) { startRound(); return; }
   if (paused || !tanks.length) return;
   const t = tanks[turn];
-  if (state === 'quick' && qte && !qte.done) {               // the post-hit A/S/D/F combo
-    if ('asdf'.includes(k) && k.length === 1 && !e.repeat && !t.ai && isMine(t)) pressCombo(k);
+  if (state === 'quick' && qte && !qte.done) {               // the post-hit W/A/S/D combo
+    if ('wasd'.includes(k) && k.length === 1 && !e.repeat && !t.ai && isMine(t)) pressCombo(k);
     return;
   }
   if (state === 'move' && !t.ai && isMine(t) && (k === 'enter' || k === 'e') && !e.repeat) { requestEndMove(); return; }
