@@ -108,13 +108,13 @@ const INK = '#e6e0c4', INK_DIM = 'rgba(230,224,196,.62)';   // khaki "stencil pa
 
 // war-torn battlefields: overcast, smoky dusk, night (green-tinted), arid. haze = smoke/fog colour, ruin = silhouette colour
 const THEMES = [
-  {name:'Overcast', sky:['#6d7a80', '#98a5a6', '#c3c6b8'], sun:{x:.76, y:.2, r:26, c:'#eef0dd', glow:'rgba(240,240,220,.55)'}, stars:0,
+  {name:'Overcast', rain:.55, storm:true, sky:['#6d7a80', '#98a5a6', '#c3c6b8'], sun:{x:.76, y:.2, r:26, c:'#eef0dd', glow:'rgba(240,240,220,.55)'}, stars:0,
    cloud:'#aeb4b0', haze:'90,92,84', ruin:'#3d4640', mtn:['#7b8780', '#5c6a62'], top:'#566337', grass:'#7d8c49', dirt:['#6e5a3a', '#4a3b25', '#2a2114']},
-  {name:'Dusk', sky:['#2b2a33', '#7a4a3a', '#d9894a'], sun:{x:.24, y:.52, r:40, c:'#ffd9a0', glow:'rgba(255,150,70,.8)'}, stars:30,
+  {name:'Dusk', rain:.22, storm:false, sky:['#2b2a33', '#7a4a3a', '#d9894a'], sun:{x:.24, y:.52, r:40, c:'#ffd9a0', glow:'rgba(255,150,70,.8)'}, stars:30,
    cloud:'#8f5b48', haze:'70,48,40', ruin:'#241c1a', mtn:['#5b3b36', '#3a2624'], top:'#5d6234', grass:'#8b8f4c', dirt:['#6a4a30', '#46301f', '#241810']},
-  {name:'Night', sky:['#05090a', '#0c1a16', '#1e3a30'], sun:{x:.8, y:.2, r:24, c:'#dbe8d4', glow:'rgba(150,210,170,.45)'}, stars:120, moon:true,
+  {name:'Night', rain:.85, storm:true, sky:['#05090a', '#0c1a16', '#1e3a30'], sun:{x:.8, y:.2, r:24, c:'#dbe8d4', glow:'rgba(150,210,170,.45)'}, stars:120, moon:true,
    cloud:'#27403a', haze:'30,56,48', ruin:'#050a08', mtn:['#14261f', '#0a1511'], top:'#2f5a3a', grass:'#4f9a5e', dirt:['#3f4a35', '#2a3223', '#141a10']},
-  {name:'Arid', sky:['#a6866a', '#d1b385', '#ecd9ac'], sun:{x:.7, y:.26, r:32, c:'#fff3cf', glow:'rgba(255,235,170,.75)'}, stars:0,
+  {name:'Arid', rain:0, dust:true, storm:false, sky:['#a6866a', '#d1b385', '#ecd9ac'], sun:{x:.7, y:.26, r:32, c:'#fff3cf', glow:'rgba(255,235,170,.75)'}, stars:0,
    cloud:'#d9c8a2', haze:'176,150,110', ruin:'#6e5a43', mtn:['#b89a74', '#8f7552'], top:'#a2874a', grass:'#c6aa66', dirt:['#a98558', '#7a5c38', '#45331d']},
 ];
 
@@ -172,6 +172,7 @@ const sfx = {
   charge: () => { tone(120, 1400, 1.0, 'sawtooth', .05); tone(60, 700, 1.0, 'sine', .08); },     // orbital strike spinning up
   zap:    () => { noise(.7, .5, 6000, 120); tone(1800, 60, .7, 'square', .12); },              // beam hits
   status: () => { tone(300, 1200, .18, 'triangle', .1); tone(1200, 300, .25, 'sine', .08, .1); },
+  thunder: () => { noise(2.4, .35, 500, 40); tone(55, 28, 2.2, 'sine', .22); },
 };
 
 // ====================================================== helpers (drawing)
@@ -316,6 +317,16 @@ function renderTex() {
     g.fillStyle = Math.random() < .5 ? 'rgba(0,0,0,.14)' : 'rgba(255,255,255,.08)';
     g.beginPath(); g.ellipse(rnd(0, WW), rnd(GROUND_MIN, WH), rnd(3, 9), rnd(2, 5), rnd(0, 3), 0, TAU); g.fill();
   }
+  for (let i = 0; i < 70; i++) {   // buried boulders: dark body, lit top edge
+    const x = rnd(0, WW), y = rnd(GROUND_MIN + 60, WH), rx = rnd(9, 24), ry = rx * rnd(.45, .7), rot = rnd(-.4, .4);
+    g.fillStyle = 'rgba(0,0,0,.2)'; g.beginPath(); g.ellipse(x, y, rx, ry, rot, 0, TAU); g.fill();
+    g.strokeStyle = 'rgba(255,240,210,.09)'; g.lineWidth = 2; g.beginPath(); g.ellipse(x, y, rx, ry, rot, Math.PI * 1.1, Math.PI * 1.9); g.stroke();
+  }
+  for (let i = 0; i < 40; i++) {   // old roots / cracks
+    let x = rnd(0, WW), y = rnd(GROUND_MIN + 40, WH); g.strokeStyle = 'rgba(0,0,0,.14)'; g.lineWidth = rnd(1, 2.2); g.beginPath(); g.moveTo(x, y);
+    for (let k = 0; k < 5; k++) { x += rnd(-14, 14); y += rnd(4, 14); g.lineTo(x, y); }
+    g.stroke();
+  }
   return c;
 }
 
@@ -326,9 +337,86 @@ function makeScene(forceTheme, gdata) {
   bgCanvas = renderBG();
   if (!texCanvas) texCanvas = renderTex();
   scorches = [];
-  clouds = Array.from({length: 10}, () => ({x: rnd(0, WW), y: rnd(70, 260) * S, s: rnd(.7, 1.6) * 1.2, v: rnd(.05, .18)}));
+  cloudSprites = [[420, 150], [320, 120], [520, 170], [260, 100], [380, 140]].map(([w, h]) => makeCloudSprite(w, h, theme.cloud));
+  clouds = Array.from({length: 13}, (_, k) => {   // three parallax layers: far (small, faint, slow) to near
+    const layer = k % 3;
+    return {x: rnd(-200, WW), y: rnd(30, 300) * (1 - layer * .15), s: (.55 + layer * .3) * rnd(.8, 1.25), v: (.04 + layer * .07) * rnd(.7, 1.3), layer, spr: k % 5};
+  }).sort((a, b) => a.layer - b.layer);
   stars = Array.from({length: theme.stars}, () => ({x: rnd(0, WW), y: rnd(0, WH * .55), r: rnd(.5, 1.7), ph: rnd(0, 9)}));
   streaks = Array.from({length: 70}, () => ({x: rnd(0, WW), y: rnd(120, WH - 240), l: rnd(14, 34), s: rnd(.6, 1.4)}));
+  rain = Array.from({length: Math.round((theme.rain || 0) * 480)}, () => ({x: rnd(-150, WW + 150), y: rnd(-WH, WH), l: rnd(12, 26), v: rnd(15, 21)}));
+  dustMotes = theme.dust ? Array.from({length: 160}, () => ({x: rnd(0, WW), y: rnd(WH * .25, WH), s: rnd(1, 2.6), ph: rnd(0, 9), v: rnd(.5, 1.5)})) : [];
+  splashes = []; bolt = null; boltFlash = 0; nextBolt = Math.floor(rnd(240, 700));
+  veg = new Uint8Array(WW).fill(1);   // grass/weeds along the surface; blasted away by explosions
+}
+
+// ====================================================== atmosphere: clouds, rain, lightning, dust, mist, grass, grain
+let cloudSprites = [], rain = [], dustMotes = [], splashes = [], veg = null, bolt = null, boltFlash = 0, nextBolt = 600, grainPat = null;
+function makeCloudSprite(w, h, col) {   // soft cloud: many radial puffs, tinted light on top / dark underneath
+  const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d');
+  for (let i = 0; i < 34; i++) {
+    const x = rnd(w * .12, w * .88), y = rnd(h * .38, h * .72), r = rnd(h * .2, h * .44) * (1.1 - Math.abs(x - w / 2) / w);
+    const rg = g.createRadialGradient(x, y - r * .25, 0, x, y, r); rg.addColorStop(0, 'rgba(255,255,255,.5)'); rg.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = rg; g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill();
+  }
+  g.globalCompositeOperation = 'source-atop';
+  const lg = g.createLinearGradient(0, h * .2, 0, h); lg.addColorStop(0, shade(col, .3)); lg.addColorStop(1, shade(col, -.45));
+  g.fillStyle = lg; g.fillRect(0, 0, w, h);
+  return c;
+}
+const hash01 = x => { const h = Math.sin(x * 12.9898) * 43758.5453; return h - Math.floor(h); };
+function clearVeg(x, r) { if (veg) for (let i = Math.max(0, Math.floor(x - r)); i <= Math.min(WW - 1, Math.ceil(x + r)); i++) veg[i] = 0; }
+
+function updateWeather() {
+  const wv = mode === 'play' ? wind : 3;
+  const drift = wv * .45;
+  for (const d of rain) {
+    d.x += drift; d.y += d.v;
+    const gx = Math.floor(d.x), gy = gx >= 0 && gx < WW ? ground[gx] : WH;
+    if (d.y >= gy) {
+      if (gx >= 0 && gx < WW && Math.random() < .35) splashes.push({x: d.x, y: gy - 1, life: 10});
+      d.y = rnd(-120, -10); d.x = rnd(-150, WW + 150) - drift * 20;
+    }
+  }
+  for (const s of splashes) s.life--;
+  splashes = splashes.filter(s => s.life > 0);
+  for (const m of dustMotes) { m.x += wv * .5 * m.v + .2; m.y += Math.sin(T * .02 + m.ph) * .4; if (m.x > WW + 10) m.x = -10; if (m.x < -10) m.x = WW + 10; }
+  if (theme.storm) {   // lightning: a bolt in the sky, a flash, thunder a moment later
+    if (--nextBolt <= 0) {
+      nextBolt = Math.floor(rnd(500, 1300));
+      const pts = []; let x = rnd(WW * .1, WW * .9), y = 0; const endY = rnd(.28, .5) * WH;
+      while (y < endY) { pts.push([x, y]); x += rnd(-38, 38); y += rnd(18, 42); }
+      pts.push([x, endY]); bolt = {pts, life: 9}; boltFlash = 1;
+      setTimeout(() => sfx.thunder(), rnd(300, 1100));
+    }
+    if (bolt && --bolt.life <= 0) bolt = null;
+    boltFlash *= .86;
+  }
+}
+
+function drawGrain() {   // subtle film grain over the battlefield
+  if (!grainPat) {
+    const c = document.createElement('canvas'); c.width = c.height = 180; const g = c.getContext('2d'), id = g.createImageData(180, 180);
+    for (let i = 0; i < id.data.length; i += 4) { const v = Math.random() * 255; id.data[i] = id.data[i + 1] = id.data[i + 2] = v; id.data[i + 3] = 22; }
+    g.putImageData(id, 0, 0); grainPat = ctx.createPattern(c, 'repeat');
+  }
+  ctx.save(); ctx.translate(rnd(-90, 0), rnd(-90, 0)); ctx.fillStyle = grainPat; ctx.fillRect(0, 0, WW + 90, WH + 90); ctx.restore();
+}
+
+function drawRainAndDust() {
+  if (rain.length) {
+    const wv = mode === 'play' ? wind : 3, drift = wv * .45;
+    ctx.strokeStyle = theme.name === 'Night' ? 'rgba(170,200,190,.30)' : 'rgba(205,215,225,.34)'; ctx.lineWidth = 1.1; ctx.beginPath();
+    for (const d of rain) { const k = d.l / d.v; ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - drift * k, d.y - d.l); }
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(215,225,235,.45)'; ctx.lineWidth = 1; ctx.beginPath();
+    for (const s of splashes) { const r = (10 - s.life) * .6 + 1; ctx.moveTo(s.x - r, s.y); ctx.quadraticCurveTo(s.x, s.y - r * 1.4, s.x + r, s.y); }
+    ctx.stroke();
+  }
+  if (dustMotes.length) {
+    ctx.fillStyle = 'rgba(225,200,150,.32)';
+    for (const m of dustMotes) ctx.fillRect(m.x, m.y, m.s * 2.2, m.s);
+  }
 }
 
 // ====================================================== tanks & turns
@@ -420,7 +508,8 @@ function updateFx() {
   for (const p of popups) { p.y -= .7; p.life--; } popups = popups.filter(p => p.life > 0);
   shake *= .9; if (shake < .15) shake = 0; whiteFlash *= .9;
   const wv = mode === 'menu' ? 3 : wind;
-  for (const c of clouds) { c.x += c.v + wv * .03; if (c.x > WW + 120) c.x = -140; if (c.x < -140) c.x = WW + 120; }
+  for (const c of clouds) { c.x += c.v + wv * .03 * (.5 + c.layer * .4); if (c.x > WW + 80) c.x = -680; if (c.x < -680) c.x = WW + 80; }
+  updateWeather();
   for (const s of streaks) { s.x += wv * .55 * s.s; if (s.x > WW + 40) s.x = -40; if (s.x < -40) s.x = WW + 40; }
   if (banner && ++banner.t > 110) banner = null;
 }
@@ -475,9 +564,10 @@ function applyEvent(e) {
       burst(m.x, m.y, 8, {type: 'smoke', s0: .2, s1: 1, l0: 30, l1: 50, z0: 4, z1: 7, drag: .96, g: -.02});
       sfx.fire(); break;
     }
-    case 'boom': scorches.push({x: e.x, y: e.y, r: e.r * 1.5}); if (scorches.length > 40) scorches.shift(); explosionFx(e.x, e.y, e.r); break;
-    case 'bang': explosionFx(e.x, e.y, e.r); break;
+    case 'boom': scorches.push({x: e.x, y: e.y, r: e.r * 1.5}); if (scorches.length > 40) scorches.shift(); explosionFx(e.x, e.y, e.r); clearVeg(e.x, e.r * 1.25); break;
+    case 'bang': explosionFx(e.x, e.y, e.r); clearVeg(e.x, 30); break;
     case 'dirt': {
+      clearVeg(e.x, e.r);
       for (let i = 0; i < 50; i++) addP({type: 'dirt', x: e.x + rnd(-e.r, e.r), y: e.y - rnd(0, e.r), vx: rnd(-1.5, 1.5), vy: rnd(-3, 0), g: .1, life: rnd(30, 60), size: rnd(2, 5), color: pick(theme.dirt)});
       rings.push({x: e.x, y: e.y, r0: 8, r1: e.r * 1.5, life: 20, max: 20, color: 'rgba(210,160,90,1)', w: 3});
       shake = Math.max(shake, 4); sfx.boom(20); break;
@@ -1054,6 +1144,13 @@ function drawTerrain() {
   g.addColorStop(0, theme.dirt[0]); g.addColorStop(.45, theme.dirt[1]); g.addColorStop(1, theme.dirt[2]);
   ctx.fillStyle = g; ctx.fill(); ctx.clip();
   ctx.drawImage(texCanvas, 0, 0);
+  for (let k = 0; k < 6; k++) {   // rock strata: wavy sediment bands deep in the ground
+    const y0 = GROUND_MIN + 30 + k * 75;
+    ctx.beginPath();
+    for (let x = 0; x <= WW; x += 12) { const y = y0 + Math.sin(x * .009 + k * 1.7) * 12 + Math.sin(x * .027 + k) * 5; x ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+    ctx.strokeStyle = 'rgba(0,0,0,.19)'; ctx.lineWidth = 7 + k; ctx.stroke();
+    ctx.save(); ctx.translate(0, -5 - k * .5); ctx.strokeStyle = 'rgba(255,240,200,.07)'; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+  }
   for (const s of scorches) {
     const sg = ctx.createRadialGradient(s.x, s.y, s.r * .2, s.x, s.y, s.r);
     sg.addColorStop(0, 'rgba(0,0,0,.55)'); sg.addColorStop(1, 'rgba(0,0,0,0)');
@@ -1061,20 +1158,48 @@ function drawTerrain() {
   }
   ctx.restore();
   const top = () => { ctx.beginPath(); for (let x = 0; x < WW; x++) x ? ctx.lineTo(x + .5, ground[x]) : ctx.moveTo(.5, ground[x]); };
+  // grass only where nothing has blown it away (veg), bare dirt rim elsewhere
+  const vegTop = dy => { ctx.beginPath(); let on = false; for (let x = 0; x < WW; x++) { if (veg[x]) { on ? ctx.lineTo(x + .5, ground[x] + dy) : ctx.moveTo(x + .5, ground[x] + dy); on = true; } else on = false; } };
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   ctx.save(); ctx.translate(0, 6); top(); ctx.strokeStyle = 'rgba(0,0,0,.22)'; ctx.lineWidth = 9; ctx.stroke(); ctx.restore();
-  top(); ctx.strokeStyle = theme.top; ctx.lineWidth = 6; ctx.stroke();
-  ctx.save(); ctx.translate(0, -1.5); top(); ctx.strokeStyle = theme.grass; ctx.lineWidth = 2.6; ctx.stroke(); ctx.restore();
+  top(); ctx.strokeStyle = shade(theme.dirt[0], .12); ctx.lineWidth = 3; ctx.stroke();
+  vegTop(0); ctx.strokeStyle = theme.top; ctx.lineWidth = 6; ctx.stroke();
+  vegTop(-1.5); ctx.strokeStyle = theme.grass; ctx.lineWidth = 2.6; ctx.stroke();
+  // tufts of grass / dry weeds that sway with the wind
+  const sway = (mode === 'play' ? wind : 3) * .35;
+  for (const [colr, off] of [[theme.top, 0], [theme.grass, 3]]) {
+    ctx.strokeStyle = colr; ctx.lineWidth = 1.4; ctx.beginPath();
+    for (let x = off + 2; x < WW; x += 6) {
+      if (!veg[x]) continue;
+      const h = hash01(x), gy = ground[x] - 1;
+      if (h < .35) continue;
+      const len = 3 + h * 8, lean = sway + Math.sin(T * .05 + x * .07) * 1.3;
+      ctx.moveTo(x, gy); ctx.quadraticCurveTo(x + lean * .4, gy - len * .6, x + lean, gy - len);
+      if (h > .7) { ctx.moveTo(x + 2, gy); ctx.quadraticCurveTo(x + 2 + lean * .5, gy - len * .4, x + 3 + lean * .8, gy - len * .75); }
+    }
+    ctx.stroke();
+  }
 }
 
 function drawBackdrop() {
   ctx.drawImage(bgCanvas, 0, 0);
   for (const s of stars) { ctx.globalAlpha = .45 + .55 * Math.sin(T * .05 + s.ph); ctx.fillStyle = '#fff'; ctx.fillRect(s.x, s.y, s.r, s.r); }
-  ctx.globalAlpha = .6; ctx.fillStyle = theme.cloud;
-  for (const c of clouds) for (const [dx, dy, k] of [[0, 0, 1], [.9, -.35, 1.25], [1.9, 0, .95], [.45, .25, .8], [1.45, .3, .85]]) {
-    ctx.beginPath(); ctx.arc(c.x + dx * 24 * c.s, c.y + dy * 14 * c.s, 19 * c.s * k, 0, TAU); ctx.fill();
+  ctx.globalAlpha = 1;
+  if (bolt) {   // lightning, behind the nearer clouds
+    ctx.save(); glow('#cfe3ff', 22); ctx.strokeStyle = `rgba(235,242,255,${.55 + Math.random() * .45})`; ctx.lineWidth = 2.6; ctx.lineJoin = 'miter';
+    ctx.beginPath(); bolt.pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke();
+    ctx.lineWidth = 1; ctx.strokeStyle = '#fff'; ctx.stroke(); ctx.restore();
+  }
+  for (const c of clouds) {   // soft parallax clouds
+    const spr = cloudSprites[c.spr]; if (!spr) continue;
+    ctx.globalAlpha = [.45, .62, .8][c.layer] * (theme.rain ? 1 : .8);
+    ctx.drawImage(spr, c.x, c.y, spr.width * c.s, spr.height * c.s);
   }
   ctx.globalAlpha = 1;
+  // low mist hugging the valleys
+  const mg = ctx.createLinearGradient(0, WH * .48, 0, WH * .78);
+  mg.addColorStop(0, `rgba(${theme.haze},0)`); mg.addColorStop(.6, `rgba(${theme.haze},${theme.rain ? .28 : .16})`); mg.addColorStop(1, `rgba(${theme.haze},0)`);
+  ctx.fillStyle = mg; ctx.fillRect(0, WH * .48, WW, WH * .3);
 }
 
 function drawWindStreaks() {
@@ -1125,6 +1250,12 @@ function drawTank(t, active, preview) {
   if (!dead) {
     ctx.fillStyle = INK; ctx.globalAlpha = .85; star(13, -15.2, 2.6); ctx.fill(); ctx.globalAlpha = 1;   // allied star insignia
     ctx.fillStyle = '#f5e9a8'; ctx.fillRect(18.6, -15.4, 2, 1.6);                                          // headlamp
+    if (theme.name === 'Night' && !preview) {   // headlight beam cutting through the dark and the rain
+      const hg2 = ctx.createLinearGradient(20, 0, 150, 0); hg2.addColorStop(0, 'rgba(255,240,190,.32)'); hg2.addColorStop(1, 'rgba(255,240,190,0)');
+      ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = hg2;
+      ctx.beginPath(); ctx.moveTo(20.5, -15.6); ctx.lineTo(150, -46); ctx.lineTo(150, 4); ctx.lineTo(20.5, -14); ctx.closePath(); ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+    }
   }
   // main gun (pivot is (0, -22) in tank space)
   ctx.save();
@@ -1213,6 +1344,9 @@ function drawShots() {
       ctx.beginPath(); ctx.moveTo(s.trail[i - 1][0], s.trail[i - 1][1]); ctx.lineTo(s.trail[i][0], s.trail[i][1]); ctx.stroke();
     }
     ctx.globalAlpha = 1;
+    const lg = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, 34);   // the shell lights up the air around it
+    lg.addColorStop(0, c + '66'); lg.addColorStop(1, c + '00');
+    ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = lg; ctx.fillRect(s.x - 34, s.y - 34, 68, 68); ctx.globalCompositeOperation = 'source-over';
     ctx.save(); glow(c, 16); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(s.x, s.y, s.w.radius > 50 ? 5 : 3.4, 0, TAU); ctx.fill(); ctx.restore();
   }
 }
@@ -1324,13 +1458,15 @@ function drawBeams() {
 function drawWorld(actors) {
   ctx.save();
   if (shake) ctx.translate(rnd(-shake, shake), rnd(-shake, shake));
-  drawBackdrop(); drawWindStreaks(); drawTerrain();
+  drawBackdrop(); if (!theme.rain && !theme.dust) drawWindStreaks(); drawTerrain();
   for (const t of actors) if (t.hp <= 0) drawTank(t, false);
   for (const t of actors) if (t.hp > 0) drawTank(t, mode === 'play' && state === 'aim' && t.i === turn);
   for (const t of actors) if (t.hp > 0 && t.status) drawStatusFx(t);
   if (mode === 'play' && state === 'aim' && !paused) drawAimHelpers(tanks[turn]);
-  drawShots(); drawParts(); drawBeams();
+  drawShots(); drawParts(); drawBeams(); drawRainAndDust();
   ctx.restore();
+  if (boltFlash > .03) { ctx.fillStyle = `rgba(215,228,255,${boltFlash * .3})`; ctx.fillRect(0, 0, WW, WH); }   // lightning lights up the field
+  drawGrain();
   if (!vigCanvas) {   // darkened corners + a faint olive grade, like a battlefield camera feed
     vigCanvas = document.createElement('canvas'); vigCanvas.width = WW; vigCanvas.height = WH;
     const v = vigCanvas.getContext('2d'), vg = v.createRadialGradient(WW / 2, WH / 2, WH * .42, WW / 2, WH / 2, WW * .66);
@@ -1908,10 +2044,18 @@ function renderTitle() {
   try { g.letterSpacing = '9px'; } catch (e) {}
   g.font = `900 76px ${FONT}`; g.textAlign = 'left'; g.textBaseline = 'middle';
   titleWidth = g.measureText(GAME_NAME).width;
-  const x0 = (w - titleWidth) / 2, tg = g.createLinearGradient(0, 30, 0, 90);
-  tg.addColorStop(0, '#f1e9bd'); tg.addColorStop(.55, '#bdb06c'); tg.addColorStop(1, '#7a7440');
-  g.lineWidth = 11; g.strokeStyle = 'rgba(14,16,8,.95)'; g.lineJoin = 'miter'; g.strokeText(GAME_NAME, x0, h / 2);
+  // gunmetal lettering: brushed steel gradient with a hard specular band, dark outline, rain streaking down the face
+  const x0 = (w - titleWidth) / 2, tg = g.createLinearGradient(0, 26, 0, 94);
+  tg.addColorStop(0, '#f2f5f7'); tg.addColorStop(.42, '#a9b2b9'); tg.addColorStop(.5, '#525b62'); tg.addColorStop(.56, '#cfd6db'); tg.addColorStop(1, '#5f686f');
+  g.lineWidth = 12; g.strokeStyle = 'rgba(10,12,14,.96)'; g.lineJoin = 'miter'; g.strokeText(GAME_NAME, x0, h / 2);
   g.fillStyle = tg; g.fillText(GAME_NAME, x0, h / 2);
+  g.globalCompositeOperation = 'source-atop';
+  for (let i = 0; i < 70; i++) {   // brushed-metal scratches + wet streaks, only on the letters
+    const sx = x0 + Math.random() * titleWidth, sy = 22 + Math.random() * 60;
+    g.strokeStyle = Math.random() < .5 ? 'rgba(255,255,255,.18)' : 'rgba(30,40,50,.22)'; g.lineWidth = Math.random() < .7 ? 1 : 2;
+    g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + rnd(-1, 1), sy + rnd(10, 34)); g.stroke();
+  }
+  g.globalCompositeOperation = 'source-over';
   g.globalCompositeOperation = 'destination-out';   // stencil bridges through letters with enclosed shapes
   for (let i = 0; i < GAME_NAME.length; i++) {
     if (!'ABDOPQRCGU0'.includes(GAME_NAME[i])) continue;
