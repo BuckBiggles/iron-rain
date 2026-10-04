@@ -4,6 +4,8 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
 
 **Play:** https://buckbiggles.github.io/iron-rain/
 
+- **Campaign:** eight single-player missions, from a lone scout to an Expert final battle, each with its own map,
+  weather, enemy (and sometimes allied) tanks and air support. Earn up to 3 stars per mission; progress saves in your browser
 - 2–4 tanks, any mix of humans and CPU opponents, on a huge battlefield
 - **CPU difficulty** (picked in the armory, ◀ ▶ or C): Easy, Normal, Hard or Expert — sharper aim, surer auth codes,
   and smarter use of drills and supply specials as it goes up

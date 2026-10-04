@@ -267,7 +267,7 @@ const CPU_LEVELS = [
   {name: 'EXPERT', color: '#d6492f', err: 1.2, combo: .95, drill: true,  spend: .90},
 ];
 let cpuLevel = 1;
-const cpuL = () => CPU_LEVELS[cpuLevel] || CPU_LEVELS[1];
+const cpuL = t => CPU_LEVELS[t && t.lvl != null ? t.lvl : cpuLevel] || CPU_LEVELS[1];   // a campaign tank can carry its own level
 function makeTerrain(mi = mapIdx) {
   ground = new Float32Array(WW);
   const f = MAPS[mi].gen();
@@ -695,11 +695,11 @@ function newTank(i, x) {
   if (x == null) { const slot = WW / numPlayers; x = slot * i + rnd(slot * 0.3, slot * 0.7); }
   const lo = loadout && loadout[i], model = lo ? lo.model : 0, M = TANKS[model];
   return {i, x, y: ground[Math.floor(x)] - 4, model, team: lo && lo.team != null ? lo.team : i % 2, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: x < WW / 2 ? 55 : 125, power: 55, weapon: 0,
-          ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color: lo ? lo.color : COLORS[i], vy: 0, stock: [], armed: -1, ai: net ? !net.occ[i] : i >= numHumans,
+          ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color: lo ? lo.color : COLORS[i], vy: 0, stock: [], armed: -1, lvl: lo && lo.lvl != null ? lo.lvl : null, ai: net ? !net.occ[i] : i >= numHumans,
           tilt: tiltAt(x), recoil: 0, dead: false};
 }
 function startRound() {
-  makeScene();
+  makeScene(campaign ? mission().theme : undefined);   // a campaign mission fixes the weather
   // teams deploy side by side: Alpha on the left, Bravo on the right
   const order = shuffled(Array.from({length: numPlayers}, (_, i) => i));   // rotate who gets which spawn every round
   if (teamMode && loadout) order.sort((a, b) => loadout[a].team - loadout[b].team);   // Alpha left, Bravo right; random within each team
@@ -713,7 +713,11 @@ function startRound() {
   mode = 'play';
   if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, v => Math.round(v * 10)), np: numPlayers, ai: tanks.map(t => t.ai), lo: tanks.map(t => [t.model, t.color, t.team]), tm: teamMode,
                                          cv: caves.map(c => [c.x, c.w, c.top, c.h].map(Math.round))});
-  beginTurn(Math.floor(Math.random() * numPlayers));
+  if (campaign) {   // mission set-up: air support for the player, who also gets the first shot
+    const m = mission(); lastPick = {model: loadout[0].model, color: loadout[0].color}; campResult = null;
+    tanks[0].stock = (m.stock || []).map(s => SPECIALS.find(q => q.short === s)).filter(Boolean);
+  }
+  beginTurn(campaign ? 0 : Math.floor(Math.random() * numPlayers));
 }
 // who controls a tank on this machine? (offline hot-seat: everyone; online: only your own seat)
 const isMine = t => !net || t.i === net.seat;
@@ -1325,7 +1329,7 @@ function aiThink(t) {
     return false;
   });
   const overCave = targets.some(o => caves.some(c => !c.falling && Math.abs(o.x - c.x) < c.w));
-  if (cpuL().drill && t.ammo[3] > 0 && (best.d > 30 || behindCover || overCave)) {
+  if (cpuL(t).drill && t.ammo[3] > 0 && (best.d > 30 || behindCover || overCave)) {
     for (let a = frozen ? aLo : 4; a <= (frozen ? aHi : 176); a += 3) for (let p = 20; p <= 100; p += 3) {
       const r = simulateDrill(m.x, m.y, a, p * mult, wind, t.i);
       if (!r || allies.some(o => Math.abs(r.x - o.x) < 70)) continue;
@@ -1338,7 +1342,7 @@ function aiThink(t) {
                              || (drill.d < 18 && behindCover && Math.random() < .5) // punch through the hill they hide behind
                              || (drill.cave && Math.random() < .45));               // or cave the ground in under them
   if (useDrill) best = drill;
-  const err = cpuL().err * (useDrill ? .6 : 1);   // difficulty sets the aim error; a drill line is less forgiving, so it's aimed more carefully
+  const err = cpuL(t).err * (useDrill ? .6 : 1);   // difficulty sets the aim error; a drill line is less forgiving, so it's aimed more carefully
   aiPlan = {a: best.a + rnd(-err, err), p: Math.round(clamp(best.p + rnd(-err, err), 20, 100)), weapon: useDrill ? 3 : 0};
   if (frozen) aiPlan.a = t.angle;
   if (!useDrill) {
@@ -1348,7 +1352,7 @@ function aiThink(t) {
   t.weapon = aiPlan.weapon;
   // supply stockpile: usually spend one (a random pick, but never Teleport, which would warp the CPU into the enemy)
   const usable = t.stock.map((s, k) => s.kind === 'teleport' ? -1 : k).filter(k => k >= 0);
-  t.armed = usable.length && !useDrill && Math.random() < cpuL().spend ? pick(usable) : -1;
+  t.armed = usable.length && !useDrill && Math.random() < cpuL(t).spend ? pick(usable) : -1;
 }
 // where would a drill shot end up? Same rules as drillStep: fly, bore straight, break out and fly on, stop at a tank or cave
 function simulateDrill(sx, sy, angle, power, windv, self) {
@@ -1581,7 +1585,7 @@ function updateGame() {
     const q = qte;
     if (!q.done) {
       q.t++;
-      if (tanks[turn].ai && !q.ai) q.ai = {next: 24, failAt: Math.random() < cpuL().combo ? -1 : Math.floor(rnd(1, 4))};   // how often the CPU nails it depends on difficulty
+      if (tanks[turn].ai && !q.ai) q.ai = {next: 24, failAt: Math.random() < cpuL(tanks[turn]).combo ? -1 : Math.floor(rnd(1, 4))};   // how often the CPU nails it depends on difficulty
       if (q.ai && --q.ai.next <= 0) { qteKey(q.idx === q.ai.failAt ? 'x' : q.seq[q.idx]); q.ai.next = Math.floor(rnd(12, 22)); }
       if (!q.done && q.t > q.limit) qteEnd(false, 'TIMED OUT!');
     } else if (++q.resT > 55) { qte = null; if (q.ok) startWheel(); else endShot(); }
@@ -1608,8 +1612,10 @@ function updateGame() {
         if (winner >= 0) {
           if (teamMode) tanks.forEach(t => { if (t.team === winTeam) wins[t.i]++; });   // every member of the winning team scores
           else wins[winner]++;
-          emit({t: 'conf', x: W / 2, y: H * .3, n: 140, sp: 8}); emit({t: 'sfx', n: 'win'});
+          if (!campaign || (teamMode ? winTeam === 0 : winner === 0)) { emit({t: 'conf', x: W / 2, y: H * .3, n: 140, sp: 8}); emit({t: 'sfx', n: 'win'}); }
+          else emit({t: 'sfx', n: 'fail'});
         }
+        if (campaign) finishMission();
       } else if (hit[turn] && tanks[turn].hp > 0) {
         hit = [false, false, false, false];
         startQuick();
@@ -2566,11 +2572,15 @@ function drawWheel() {
 function drawOver() {
   ctx.fillStyle = 'rgba(8,10,5,.62)'; ctx.fillRect(0, 0, W, H);
   const teamWin = teamMode && winTeam >= 0;
-  const col = teamWin ? TEAMS[winTeam].color : winner >= 0 ? tanks[winner].color : '#fff';
+  const cr = campaign && campResult;
+  const col = cr ? (cr.won ? '#9cc255' : '#ef4444') : teamWin ? TEAMS[winTeam].color : winner >= 0 ? tanks[winner].color : '#fff';
   const py = 110, ph = 330;
   halo(W / 2 - 320, py, 640, ph, 24, col); panel(W / 2 - 320, py, 640, ph, 24, col, 3);
-  text(winner >= 0 ? '🏆' : '🤝', W / 2, py + 40, 40, '#fff', 'center');
-  text(teamWin ? `TEAM ${TEAMS[winTeam].name} HOLDS THE FIELD` : winner >= 0 ? `UNIT 0${winner + 1} HOLDS THE FIELD` : 'STALEMATE', W / 2, py + 92, 34, col, 'center', '900');
+  if (cr && cr.won) drawStars(cr.stars, W / 2, py + 40, 36, 'center', '#e8c547', 'rgba(255,255,255,.18)');
+  else if (cr) text('✖', W / 2, py + 40, 40, '#ef4444', 'center', '900');
+  else text(winner >= 0 ? '🏆' : '🤝', W / 2, py + 40, 40, '#fff', 'center');
+  if (cr) text(cr.won ? 'MISSION ACCOMPLISHED' : 'MISSION FAILED', W / 2, py + 92, 34, col, 'center', '900');
+  else text(teamWin ? `TEAM ${TEAMS[winTeam].name} HOLDS THE FIELD` : winner >= 0 ? `UNIT 0${winner + 1} HOLDS THE FIELD` : 'STALEMATE', W / 2, py + 92, 34, col, 'center', '900');
   // after-action report
   const cols = [['UNIT', W / 2 - 270, 'left'], ['WINS', W / 2 - 80, 'center'], ['DAMAGE', W / 2 + 20, 'center'], ['ACCURACY', W / 2 + 130, 'center'], ['KILLS', W / 2 + 240, 'center']];
   const hy = py + 140;
@@ -2589,11 +2599,139 @@ function drawOver() {
     text(s.shots ? `${Math.round(s.hits / s.shots * 100)}%  (${s.hits}/${s.shots})` : '—', cols[3][1], y + 1, 13, INK, 'center', '700');
     text(String(s.kills), cols[4][1], y + 1, 14, s.kills ? '#ff8a6b' : INK_DIM, 'center', '800');
   });
-  const hint = net && net.role === 'client' ? 'Waiting for the host to start the next round…     ·     ESC  leave'
+  if (cr) {   // what the mission earned, and what's next
+    const m = mission(), notes = cr.won ? `${cr.hpOk ? '★' : '☆'} half armor left    ${cr.fast ? '★' : '☆'} ${stats[0].shots}/${m.par} shots`
+      + (cr.newUnlock ? '    ·    NEW MISSION UNLOCKED' : '') + (cr.last ? '    ·    CAMPAIGN COMPLETE!' : '') : `Operation ${m.name} failed. Regroup and try again.`;
+    text(notes, W / 2, py + ph - 18, 12, cr.won ? '#e8d27a' : '#fca5a5', 'center', '800');
+  }
+  const hint = cr ? (cr.won ? 'ENTER  mission board     ·     R  replay' : 'ENTER  retry     ·     ESC  mission board')
+    : net && net.role === 'client' ? 'Waiting for the host to start the next round…     ·     ESC  leave'
     : `ENTER  next round     ·     ESC  ${net ? 'close room' : 'main menu'}`;
   text(hint, W / 2, py + ph + 30, 16, '#fff', 'center', '700', 'rgba(0,0,0,.6)');
 }
 
+
+// ====================================================== campaign: eight single-player missions
+// Each mission fixes the map, the weather, the enemy (and allied) tanks with their own CPU difficulty, and may hand the
+// player some supply specials ("air support"). The player picks their own tank. Stars: win · finish above half armor ·
+// win within `par` shots. Progress lives in this browser's localStorage (and the game works without it).
+// models: 0 Warhound 1 Bulwark 2 Jackal 3 Mammoth 4 Viper 5 Rhino 6 Scorpion 7 Kodiak · maps: 0 Hills 1 Pass 2 Gorge 3 Steppe 4 Badlands
+// themes: 0 Overcast 1 Dusk 2 Night 3 Arid · lvl: 0 Easy 1 Normal 2 Hard 3 Expert
+const MISSIONS = [
+  {name: 'FIRST LIGHT', map: 0, theme: 0, par: 6, enemies: [{model: 2, lvl: 0}],
+   brief: 'A lone enemy scout is probing our lines. Knock it out and get the feel of your gun. Every power point carries a shell the same distance: adjust, fire, adjust again.'},
+  {name: 'HILL 203', map: 1, theme: 1, par: 8, enemies: [{model: 0, lvl: 1}],
+   brief: 'The enemy holds the far side of the ridge. Lob your shells high over the peak, or bore straight through it with a drill.'},
+  {name: 'THE GORGE', map: 2, theme: 0, par: 10, enemies: [{model: 5, lvl: 0}, {model: 2, lvl: 0}],
+   brief: 'Two light units are dug in across the canyon and they will both be shooting at you. Pick them off one at a time, and move after every shot.'},
+  {name: 'DUST DEVIL', map: 3, theme: 3, par: 8, enemies: [{model: 4, lvl: 2}],
+   brief: 'Open steppe, nowhere to hide, and a Viper tank destroyer hunting you. It hits hard and it hits often. Strike first.'},
+  {name: 'BADLANDS PATROL', map: 4, theme: 1, par: 10, allies: [{model: 7, lvl: 1}], enemies: [{model: 5, lvl: 1}, {model: 6, lvl: 1}],
+   brief: 'You are not alone this time: a Kodiak crew rides with you. Mesas break up the lines of fire. Mind your friend, friendly fire still hurts.'},
+  {name: 'NIGHT RAID', map: 0, theme: 2, par: 12, stock: ['LUCKY 7'], enemies: [{model: 1, lvl: 2}, {model: 0, lvl: 1}],
+   brief: 'Under cover of darkness and rain, hit a Bulwark heavy and its escort. Command has released a LUCKY 7 battery to you: press Q to arm it.'},
+  {name: 'CAVERN COUNTRY', map: 2, theme: 3, par: 12, stock: ['ORBITAL'], allies: [{model: 2, lvl: 2}], enemies: [{model: 3, lvl: 2}, {model: 7, lvl: 2}],
+   brief: 'The enemy has parked its heavies above old caverns. Crack the roofs and drop them in. One orbital strike is authorized.'},
+  {name: 'IRON RAIN', map: 1, theme: 1, par: 14, stock: ['NUKE', 'ORBITAL'], allies: [{model: 7, lvl: 2}], enemies: [{model: 3, lvl: 3}, {model: 4, lvl: 3}],
+   brief: 'The final push. Their best crews, a Mammoth and a Viper, hold the pass. Everything we have is yours: a nuke, an orbital strike and a veteran wingman. Make it rain.'},
+];
+let campaign = null, campSel = 0, campResult = null, lastPick = null;
+function campProgress() {
+  try { const p = JSON.parse(localStorage.getItem('ironrain.campaign') || 'null'); if (p && Array.isArray(p.stars)) return p; } catch (e) {}
+  return {unlocked: 1, stars: MISSIONS.map(() => 0)};
+}
+function saveCampProgress(p) { try { localStorage.setItem('ironrain.campaign', JSON.stringify(p)); } catch (e) {} }
+const mission = () => campaign && MISSIONS[campaign.idx];
+function startMission(idx) {   // set up the armory for a mission: the player's seat is free, everything else is fixed
+  const m = MISSIONS[idx]; campaign = {idx}; campResult = null;
+  net = null; numHumans = 1; numPlayers = 1 + (m.allies || []).length + m.enemies.length; mapIdx = m.map;
+  teamMode = numPlayers > 2;
+  const used = [], take = prefer => { const c = prefer.find(c => !used.includes(c)) || PALETTE.find(c => !used.includes(c)); used.push(c); return c; };
+  const me = {model: lastPick ? lastPick.model : 0, color: take([lastPick ? lastPick.color : COLORS[0]]), ready: false, cpu: false, team: 0};
+  loadout = [me];
+  for (const a of m.allies || []) loadout.push({model: a.model, color: take(['#6f93b3', '#4a5f86', '#d9dccf']), ready: true, cpu: true, team: 0, lvl: a.lvl});
+  for (const e of m.enemies) loadout.push({model: e.model, color: take(['#c0583d', '#3d4248', '#8f8f86', '#9c6b8f']), ready: true, cpu: true, team: 1, lvl: e.lvl});
+  armoryFocus = 0; armoryGo = 0; mode = 'armory'; menuButtons = []; sfx.click();
+}
+function finishMission() {   // called once when a campaign round ends
+  const m = mission(), me = tanks[0];
+  const won = teamMode ? winTeam === 0 : winner === 0;
+  const hpOk = me.hp / me.maxHp >= .5, fast = stats[0].shots <= m.par;
+  const stars = won ? 1 + (hpOk ? 1 : 0) + (fast ? 1 : 0) : 0;
+  const p = campProgress(), idx = campaign.idx, newUnlock = won && idx + 2 > p.unlocked && idx + 1 < MISSIONS.length;
+  if (won) { p.unlocked = Math.max(p.unlocked, Math.min(MISSIONS.length, idx + 2)); p.stars[idx] = Math.max(p.stars[idx] || 0, stars); saveCampProgress(p); }
+  campResult = {won, stars, hpOk, fast, newUnlock, last: idx === MISSIONS.length - 1};
+}
+function leaveMission(toNext) {   // back to the mission board
+  if (toNext && campaign && campResult && campResult.won) campSel = Math.min(MISSIONS.length - 1, campaign.idx + 1);
+  campaign = null; campResult = null; teamMode = false; mode = 'menu'; menuStage = 'campaign'; loadout = null; initMenuScene();
+}
+const starStr = n => '★'.repeat(n) + '☆'.repeat(3 - n);
+function drawStars(n, x, y, size, align = 'left', on = '#b8860b', off = 'rgba(43,35,22,.22)') {   // earned stars gold, the rest faint
+  const w = size * 1.05, x0 = align === 'right' ? x - w * 3 : align === 'center' ? x - w * 1.5 : x;
+  for (let k = 0; k < 3; k++) text('★', x0 + w * (k + .5), y, size, k < n ? on : off, 'center', '900');
+}
+function typeWrap(str, maxW, size) {   // word-wrap for the typewriter face
+  ctx.font = `700 ${size}px ${TYPE}`;
+  const out = []; let line = '';
+  for (const word of str.split(' ')) { const t = line ? line + ' ' + word : word; if (ctx.measureText(t).width > maxW && line) { out.push(line); line = word; } else line = t; }
+  if (line) out.push(line);
+  return out;
+}
+function drawCampaign() {   // the mission board: list on the left, the selected mission's briefing dossier on the right
+  const prog = campProgress(); let any = false;
+  const total = prog.stars.reduce((a, b) => a + (b || 0), 0);
+  text(`CAMPAIGN  ·  ${Math.min(prog.unlocked, MISSIONS.length)}/${MISSIONS.length} MISSIONS OPEN  ·  ★ ${total}/${MISSIONS.length * 3}`, W / 2, 190, 15, INK, 'center', '800', 'rgba(0,0,0,.6)');
+  MISSIONS.forEach((m, i) => {
+    const x = 36, y = 208 + i * 47, w = 360, h = 40, locked = i >= prog.unlocked, sel = i === campSel;
+    paper(x + (sel ? 10 : 0), y, w, h, 11 + i, sel ? 1 : 0);
+    const ox = x + (sel ? 10 : 0);
+    ctx.fillStyle = sel ? STAMP : locked ? '#6b6250' : COLORS[i % 4]; ctx.fillRect(ox, y + 5, 6, h - 10);
+    ttext('No.' + (i + 1), ox + 16, y + 20, 11, 'rgba(43,35,22,.6)');
+    text(m.name, ox + 58, y + 21, 16, locked ? 'rgba(43,35,22,.4)' : PAPER_INK, 'left', '900');
+    if (locked) ttext('LOCKED', ox + w - 14, y + 21, 11, 'rgba(43,35,22,.5)', 'right');
+    else drawStars(prog.stars[i] || 0, ox + w - 12, y + 21, 15, 'right');
+    menuButtons.push({x, y, w: w + 10, h, action: () => { campSel = i; sfx.click(); }});
+    if (inRect(mouse, {x, y, w: w + 10, h})) any = true;
+  });
+  // the dossier
+  const m = MISSIONS[campSel], locked = campSel >= prog.unlocked, dx = 430, dy = 204, dw = 654, dh = 404;
+  paper(dx, dy, dw, dh, 41);
+  tape(dx + 60, dy + 2, 80, -.1); tape(dx + dw - 60, dy + 2, 80, .08);
+  stamp(locked ? 'LOCKED' : 'TOP SECRET', dx + dw - 110, dy + 46, 15, .14);
+  ttext(`MISSION ${campSel + 1} OF ${MISSIONS.length}`, dx + 30, dy + 30, 11, 'rgba(43,35,22,.65)');
+  text(`OPERATION ${m.name}`, dx + 30, dy + 58, 26, PAPER_INK, 'left', '900');
+  ttext(`LOCATION: ${MAPS[m.map].name}   ·   CONDITIONS: ${THEMES[m.theme].name.toUpperCase()}`, dx + 30, dy + 86, 11.5, 'rgba(43,35,22,.85)');
+  ctx.fillStyle = 'rgba(43,35,22,.45)'; ctx.fillRect(dx + 30, dy + 98, dw - 60, 1.2);
+  typeWrap(m.brief, dw - 70, 13).forEach((l, k) => ttext(l, dx + 30, dy + 118 + k * 18, 13));
+  let y = dy + 196;
+  const unitLine = (label, list, col) => {
+    if (!list || !list.length) return;
+    text(label, dx + 30, y, 12, PAPER_INK, 'left', '900');
+    let x = dx + 170;
+    for (const u of list) {
+      const L = CPU_LEVELS[u.lvl], s = `${TANKS[u.model].name}`;
+      text(s, x, y, 13, col, 'left', '900'); ctx.font = `900 13px ${FONT}`; x += ctx.measureText(s).width + 6;
+      rr(x, y - 8, 56, 16, 4); ctx.fillStyle = L.color; ctx.fill(); text(L.name, x + 28, y + 1, 9.5, '#15160f', 'center', '900'); x += 70;
+    }
+    y += 26;
+  };
+  unitLine('ENEMY FORCES', m.enemies, STAMP);
+  unitLine('ALLIED SUPPORT', m.allies, '#2f4a7a');
+  if (m.stock) {
+    text('AIR SUPPORT', dx + 30, y, 12, PAPER_INK, 'left', '900');
+    ttext(m.stock.map(s => { const sp = SPECIALS.find(q => q.short === s); return sp ? sp.icon + ' ' + sp.name : s; }).join('   '), dx + 170, y + 1, 12.5);
+    y += 26;
+  }
+  text('OBJECTIVE', dx + 30, y, 12, PAPER_INK, 'left', '900'); ttext('Destroy every enemy unit.', dx + 170, y + 1, 12.5); y += 26;
+  text('COMMENDATIONS', dx + 30, y, 12, PAPER_INK, 'left', '900');
+  ttext(`★ win   ★ finish above half armor   ★ win in ${m.par} shots or fewer`, dx + 170, y + 1, 12);
+  const best = prog.stars[campSel] || 0;
+  if (best && !locked) { text('BEST', dx + 30, dy + dh - 32, 14, PAPER_INK, 'left', '900'); drawStars(best, dx + 74, dy + dh - 33, 20); }
+  if (locked) ttext('Complete the previous mission to unlock this one.', dx + 30, dy + dh - 32, 12.5, STAMP);
+  else if (button(dx + dw - 230, dy + dh - 84, 206, 66, 'DEPLOY', 'ENTER · choose your tank', null, STAMP, () => startMission(campSel))) any = true;
+  cv.style.cursor = any ? 'pointer' : 'default';
+}
 // ====================================================== drawing: menu
 // ---- 1940s war-office paperwork: aged manila sheets, typewriter text, tape and rubber stamps
 const TYPE = '"Courier New",Courier,"Lucida Console",monospace', PAPER_INK = '#2b2316', STAMP = '#a3271c';
@@ -2763,12 +2901,12 @@ function drawArmory() {
   menuButtons = [];
   ctx.fillStyle = 'rgba(14,10,4,.38)'; ctx.fillRect(0, 0, W, H);
   ctx.fillStyle = '#a3271c'; ctx.fillRect(W / 2 - 200, 18, 400, 4); ctx.fillStyle = 'rgba(233,220,180,.6)'; ctx.fillRect(W / 2 - 200, 24, 400, 1);
-  text('ARMORY — SELECT YOUR TANK', W / 2, 46, 30, INK, 'center', '900', 'rgba(0,0,0,.6)');
-  text(teamMode ? 'Pick a tank, a colour and a side, then hit READY. CPU units fill the smaller team.'
+  text(campaign ? `MISSION ${campaign.idx + 1} — ${mission().name}` : 'ARMORY — SELECT YOUR TANK', W / 2, 46, 30, INK, 'center', '900', 'rgba(0,0,0,.6)');
+  text(campaign ? 'Pick your tank and colour, then hit READY. The enemy is waiting.' : teamMode ? 'Pick a tank, a colour and a side, then hit READY. CPU units fill the smaller team.'
                 : 'Pick a tank and a colour, then hit READY. CPU units are assigned at random.', W / 2, 72, 13, INK_DIM, 'center', '700');
   const n = loadout.length, gap = 14, pw = Math.min(255, (W - 60 - gap * (n - 1)) / n), x0 = (W - (pw * n + gap * (n - 1))) / 2, py = 92, ph = 468;
-  let any = drawMapPicker(!net || net.role === 'host');
-  if (loadout.some(p => p.cpu)) {   // CPU difficulty, under the mode switch (or in its place with 2 tanks)
+  let any = drawMapPicker(!campaign && (!net || net.role === 'host'));
+  if (loadout.some(p => p.cpu) && !campaign) {   // CPU difficulty, under the mode switch (or in its place with 2 tanks)
     const canSet = !net || net.role === 'host', mx = W - 252, my = n >= 3 ? 64 : 30, L = cpuL();
     text('CPU', mx - 8, my + 11, 10, INK_DIM, 'right', '800');
     if (canSet && smallBtn(mx, my, 30, 22, '◀', L.color, () => setCpuLevel(cpuLevel - 1), false)) any = true;
@@ -2776,7 +2914,7 @@ function drawArmory() {
     text(L.name, mx + 114, my + 12, 12, '#15160f', 'center', '900');
     if (canSet && smallBtn(mx + 198, my, 30, 22, '▶', L.color, () => setCpuLevel(cpuLevel + 1), false)) any = true;
   }
-  if (n >= 3) {   // game mode switch: Free-for-all / Teams (local player or online host decides)
+  if (n >= 3 && !campaign) {   // game mode switch: Free-for-all / Teams (local player or online host decides)
     const canSet = !net || net.role === 'host', mx = W - 252, my = 30;
     text('MODE', mx - 8, my + 15, 10, INK_DIM, 'right', '800');
     [['FREE-FOR-ALL', false], ['TEAMS', true]].forEach(([label, val], k) => {
@@ -2811,8 +2949,8 @@ function drawArmory() {
     if (teamMode) {   // side picker: click (or T) to switch between Alpha and Bravo
       const tm = TEAMS[p.team || 0], tx = px + 18, ty = py + 55;
       rr(tx, ty, 92, 20, 6); ctx.fillStyle = tm.color; ctx.fill();
-      text((mine ? '⇄ ' : '') + 'TEAM ' + tm.name, tx + 46, ty + 11, 11, inkOn(tm.color), 'center', '900');
-      if (mine) menuButtons.push({x: tx, y: ty, w: 92, h: 20, action: () => requestPick(i, {team: 1 - (p.team || 0)})});
+      text((mine && !campaign ? '⇄ ' : '') + (campaign ? (p.team ? 'ENEMY' : i ? 'ALLY' : 'YOU') : 'TEAM ' + tm.name), tx + 46, ty + 11, 11, inkOn(tm.color), 'center', '900');
+      if (mine && !campaign) menuButtons.push({x: tx, y: ty, w: 92, h: 20, action: () => requestPick(i, {team: 1 - (p.team || 0)})});
     }
     // name, role, stats
     text(M.name, px + pw / 2, py + 202, 21, INK, 'center', '900');
@@ -2839,7 +2977,7 @@ function drawArmory() {
     });
     // ready
     const ry = py + 392;
-    if (p.cpu) { rr(px + 14, ry, pw - 28, 46, 10); ctx.fillStyle = 'rgba(156,194,85,.25)'; ctx.fill(); text(`CPU · ${cpuL().name} — READY`, px + pw / 2, ry + 24, 15, cpuL().color, 'center', '900'); }
+    if (p.cpu) { rr(px + 14, ry, pw - 28, 46, 10); ctx.fillStyle = 'rgba(156,194,85,.25)'; ctx.fill(); text(`CPU · ${cpuL(p).name} — READY`, px + pw / 2, ry + 24, 15, cpuL(p).color, 'center', '900'); }
     else if (mine) { if (smallBtn(px + 14, ry, pw - 28, 46, p.ready ? '✓ READY' : 'READY', p.ready ? '#9cc255' : p.color, () => requestPick(i, {ready: !p.ready}), p.ready)) any = true; }
     else { rr(px + 14, ry, pw - 28, 46, 10); ctx.fillStyle = p.ready ? 'rgba(156,194,85,.25)' : 'rgba(255,255,255,.06)'; ctx.fill();
            text(p.ready ? '✓ READY' : 'CHOOSING…', px + pw / 2, ry + 24, 16, p.ready ? '#9cc255' : INK_DIM, 'center', '900'); }
@@ -2848,7 +2986,7 @@ function drawArmory() {
   const all = loadout.every(p => p.ready);
   if (all && !teamsValid()) text('⚠ BOTH TEAMS NEED AT LEAST ONE TANK — someone switch sides', W / 2, 586, 15, '#fca5a5', 'center', '900', 'rgba(0,0,0,.6)');
   else if (all) { ctx.save(); glow('#9cc255', 20); panel(W / 2 - 200, 566, 400, 40, 12, '#9cc255', 2); noGlow(); ctx.restore(); text('ALL UNITS READY — DEPLOYING…', W / 2, 587, 17, '#9cc255', 'center', '900'); }
-  else text('←/→ tank  ·  ↑/↓ colour' + (teamMode ? '  ·  T team' : '') + (!net || net.role === 'host' ? '  ·  N map  ·  C cpu' + (n >= 3 ? '  ·  G mode' : '') : '') +
+  else text('←/→ tank  ·  ↑/↓ colour' + (teamMode && !campaign ? '  ·  T team' : '') + (!campaign && (!net || net.role === 'host') ? '  ·  N map  ·  C cpu' + (n >= 3 ? '  ·  G mode' : '') : '') +
             '  ·  Enter ready' + (net ? '  ·  Esc leave' : '  ·  Tab next player  ·  Esc back'), W / 2, 586, 13, INK_DIM, 'center', '700', 'rgba(0,0,0,.6)');
   if (smallBtn(16, 568, 150, 36, net ? (net.role === 'host' ? '◀ CLOSE ROOM' : '◀ LEAVE') : '◀ BACK', '#c0583d', armoryBack, false)) any = true;
   cv.style.cursor = any ? 'pointer' : 'default';
@@ -2856,7 +2994,7 @@ function drawArmory() {
 }
 function armoryBack() {   // same as Esc in the armory
   sfx.click();
-  if (net) leaveRoom(); else { mode = 'menu'; menuStage = 'humans'; loadout = null; }
+  if (net) leaveRoom(); else if (campaign) leaveMission(false); else { mode = 'menu'; menuStage = 'humans'; loadout = null; }
 }
 function copyInvite() {
   const link = inviteLink();
@@ -2981,21 +3119,24 @@ function drawMenu() {
   drawPosterHeader();
   // a back button in the same place on every screen past the first (Esc / Backspace do the same)
   const toHome = () => { menuStage = 'home'; netMsg = ''; sfx.click(); };
-  const back = {count: ['◀ BACK', toHome], hostcount: ['◀ BACK', toHome], join: ['◀ BACK', toHome],
+  const back = {count: ['◀ BACK', toHome], hostcount: ['◀ BACK', toHome], join: ['◀ BACK', toHome], campaign: ['◀ BACK', toHome],
                 humans: ['◀ BACK', () => { menuStage = 'count'; sfx.click(); }],
                 connecting: ['◀ CANCEL', () => leaveRoom()],
                 lobby: [net && net.role === 'host' ? '◀ CLOSE ROOM' : '◀ LEAVE', () => leaveRoom()]}[menuStage];
   const backHov = back ? button(20, 14, 180, 40, back[0], '', null, '#c0583d', back[1]) : false;
 
+  if (menuStage === 'campaign') { drawCampaign(); if (backHov) cv.style.cursor = 'pointer'; drawUIParts(); return; }
   if (['join', 'connecting', 'lobby'].includes(menuStage)) { drawOnlineMenus(); if (backHov) cv.style.cursor = 'pointer'; return; }
   let any = false;
   if (menuStage === 'home') {
     text('SELECT DEPLOYMENT', W / 2, 198, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
+    const cp = campProgress(), cstars = cp.stars.reduce((a, b) => a + (b || 0), 0);
     const opts = [
-      ['LOCAL', 'Same screen · friends + CPUs', '1', () => { menuStage = 'count'; sfx.click(); }],
-      ['HOST', 'Create a room for online friends', '2', () => { menuStage = 'hostcount'; sfx.click(); }],
-      ['JOIN', 'Enter a room code', '3', () => { codeInput = ''; netMsg = ''; menuStage = 'join'; sfx.click(); }]];
-    opts.forEach(([big, sub, key, act], i) => { if (button(W / 2 - 480 + i * 330, 218, 300, 100, big, sub, key, COLORS[i], act)) any = true; });
+      ['CAMPAIGN', `Mission ${Math.min(cp.unlocked, MISSIONS.length)}/${MISSIONS.length} · ★ ${cstars}/${MISSIONS.length * 3}`, '1', () => { campSel = Math.min(cp.unlocked, MISSIONS.length) - 1; menuStage = 'campaign'; sfx.click(); }],
+      ['LOCAL', 'Same screen · friends + CPUs', '2', () => { menuStage = 'count'; sfx.click(); }],
+      ['HOST', 'Online room for friends', '3', () => { menuStage = 'hostcount'; sfx.click(); }],
+      ['JOIN', 'Enter a room code', '4', () => { codeInput = ''; netMsg = ''; menuStage = 'join'; sfx.click(); }]];
+    opts.forEach(([big, sub, key, act], i) => { if (button(W / 2 - 510 + i * 260, 218, 240, 100, big, sub, key, i ? COLORS[i - 1] : STAMP, act)) any = true; });
     if (netMsg) text(netMsg, W / 2, 346, 14, '#fca5a5', 'center', '800', 'rgba(0,0,0,.6)');
   } else if (menuStage === 'count' || menuStage === 'hostcount') {
     const online = menuStage === 'hostcount';
@@ -3018,7 +3159,7 @@ function drawMenu() {
   text('FIELD MANUAL  FM 17-IR', 84, 420, 16, PAPER_INK, 'left', '900');
   ttext('OPERATION OF THE MEDIUM TANK', 84, 438, 10, 'rgba(43,35,22,.7)');
   ctx.fillStyle = 'rgba(43,35,22,.5)'; ctx.fillRect(84, 448, 420, 1.2);
-  [['←  →', 'aim the barrel'], ['↑  ↓', 'set power (Shift = fine)'], ['A  D', 'drive (limited fuel)'], ['1  2  3', 'pick weapon'], ['SPACE', 'FIRE!'], ['T / M / P', 'aim assist / sound / pause']]
+  [['←  →', 'aim the barrel'], ['↑  ↓', 'set power (Shift = fine)'], ['A  D', 'drive (limited fuel)'], ['1 – 4', 'pick weapon'], ['SPACE', 'FIRE!'], ['T / M / P', 'aim assist / sound / pause']]
     .forEach(([k, d], i) => { const y = 466 + i * 21; ctx.strokeStyle = 'rgba(43,35,22,.55)'; ctx.lineWidth = 1.2; rr(84, y - 9, 86, 18, 4); ctx.stroke();
                               text(k, 127, y + 1, 12, PAPER_INK, 'center', '900'); ttext(d, 184, y + 1, 12.5); });
   stamp('RESTRICTED', 452, 560, 14, -.2);
@@ -3106,7 +3247,8 @@ addEventListener('keydown', e => {
   }
   if (k === 'm') { muted = !muted; return; }
   if (mode === 'armory') {
-    if (k === 'escape') { if (net) leaveRoom(); else { mode = 'menu'; menuStage = 'humans'; loadout = null; } return; }
+    if (k === 'escape') { if (net) leaveRoom(); else if (campaign) leaveMission(false); else { mode = 'menu'; menuStage = 'humans'; loadout = null; } return; }
+    if (campaign && k.length === 1 && 'gnct'.includes(k)) return;   // a mission fixes the map, sides and CPUs
     if (k === 'tab' && !net) {   // hot-seat: move the keyboard to the next human player's panel
       e.preventDefault();
       const hum = loadout.map((p, j) => p.cpu ? -1 : j).filter(j => j >= 0);
@@ -3136,14 +3278,22 @@ addEventListener('keydown', e => {
       else menuStage = menuStage === 'humans' ? 'count' : 'home';
       netMsg = ''; return;
     }
-    if (menuStage === 'home') { if (n === 1) menuStage = 'count'; else if (n === 2) menuStage = 'hostcount'; else if (n === 3) { codeInput = ''; netMsg = ''; menuStage = 'join'; } }
+    if (menuStage === 'home') { if (n === 1) { const cp = campProgress(); campSel = Math.min(cp.unlocked, MISSIONS.length) - 1; menuStage = 'campaign'; } else if (n === 2) menuStage = 'count'; else if (n === 3) menuStage = 'hostcount'; else if (n === 4) { codeInput = ''; netMsg = ''; menuStage = 'join'; } }
+    else if (menuStage === 'campaign') {   // the mission board
+      if (k === 'arrowup' || k === 'arrowdown') { campSel = clamp(campSel + (k === 'arrowdown' ? 1 : -1), 0, MISSIONS.length - 1); sfx.click(); }
+      else if (k === 'enter' && campSel < campProgress().unlocked) startMission(campSel);
+    }
     else if (menuStage === 'count') { if (n >= 2 && n <= 4) pickCount(n); }
     else if (menuStage === 'hostcount') { if (n >= 2 && n <= 4) hostRoom(n); }
     else if (menuStage === 'humans') { if (n >= 0 && n <= numPlayers) pickHumans(n); }
     else if (menuStage === 'lobby' && k === 'enter') startOnline();
     return;
   }
-  if (k === 'escape') { if (net) leaveRoom(); else { mode = 'menu'; menuStage = 'home'; loadout = null; initMenuScene(); } return; }
+  if (k === 'escape') { if (net) leaveRoom(); else if (campaign) leaveMission(false); else { mode = 'menu'; menuStage = 'home'; loadout = null; initMenuScene(); } return; }
+  if (campaign && state === 'over') {   // won: ENTER back to the board (next mission picked) · lost: ENTER retries · R replays either way
+    if (k === 'enter') { if (campResult && campResult.won) leaveMission(true); else startRound(); return; }
+    if (k === 'r') { startRound(); return; }
+  }
   if (k === 'p' && state !== 'over' && !net) { paused = !paused; return; }
   if (k === 't') { assist = !assist; return; }
   if (state === 'over' && k === 'enter' && (!net || net.role === 'host')) { startRound(); return; }
