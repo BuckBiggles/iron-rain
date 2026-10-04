@@ -702,7 +702,7 @@ function nextAlive(from) {
   return from;
 }
 function beginTurn(t) {
-  turn = t; state = 'aim'; wind = Math.round(rnd(-10, 10));
+  turn = t; state = 'aim'; wind = 0;   // no wind: shells fly on gravity alone
   tanks[t].fuel = tanks[t].maxFuel; aiPlan = null; aiTimer = 80;
   turnFrames = net && !tanks[t].ai ? TURN_SECONDS * 60 : 0;   // online humans get a shot clock so nobody can stall the game
   emit({t: 'turn', i: t});
@@ -2002,21 +2002,11 @@ function drawCards() {
   });
 }
 
-function drawWind() {
-  const cx = W / 2, y = 94, w = 230, h = 24;
-  panel(cx - w / 2, y - h / 2, w, h, 12);
-  text('WIND', cx - w / 2 + 14, y + 1, 11, INK_DIM, 'left', '800');
-  const mid = cx + 12, half = 62, f = wind / 10;
-  rr(mid - half, y - 4, half * 2, 8, 4); ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fill();
-  ctx.fillStyle = '#d8b24a';
-  if (wind) { rr(f > 0 ? mid : mid + f * half, y - 4, Math.abs(f) * half, 8, 4); ctx.fill(); }
-  ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.fillRect(mid - 1, y - 7, 2, 14);
-  text(wind === 0 ? 'calm' : (wind < 0 ? '◀ ' : '') + Math.abs(wind) + (wind > 0 ? ' ▶' : ''), cx + w / 2 - 12, y + 1, 12, '#fff', 'right', '800');
-  if (turnLeft > 0) {   // online shot clock
-    const low = turnLeft <= 10, px = cx + w / 2 + 10;
-    panel(px, y - h / 2, 66, h, 12, low ? '#ef4444' : 'rgba(255,255,255,.14)', low ? 2 : 1.5);
-    text('⏱ ' + turnLeft, px + 33, y + 1, 13, low ? '#fca5a5' : '#fff', 'center', '800');
-  }
+function drawShotClock() {   // online: seconds left for a human's shot
+  if (turnLeft <= 0) return;
+  const y = 94, h = 24, low = turnLeft <= 10, px = W / 2 - 33;
+  panel(px, y - h / 2, 66, h, 12, low ? '#ef4444' : 'rgba(255,255,255,.14)', low ? 2 : 1.5);
+  text('⏱ ' + turnLeft, px + 33, y + 1, 13, low ? '#fca5a5' : '#fff', 'center', '800');
 }
 
 function drawControlPanel() {
@@ -2721,7 +2711,7 @@ function draw() {
   } else {
     uiButtons = [];
     drawOffscreenShells();
-    drawCards(); drawWind(); drawControlPanel(); drawInfoCard(); drawBanner();
+    drawCards(); drawShotClock(); drawControlPanel(); drawInfoCard(); drawBanner();
     if (state === 'quick' && qte) drawQuick();
     if (state === 'wheel' && wheel) drawWheel();
     if (state === 'over') drawOver();

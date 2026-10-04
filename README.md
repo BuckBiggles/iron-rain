@@ -17,7 +17,7 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
 - Ground that behaves like loose sand: steep slopes slump, craters cave in, dirt piles spread into dunes
 - **Underground caverns** on every map: a blast nearby caves one in, the ground above sinks into the hole and any
   tank on top goes down with it (neighbouring caverns can chain-collapse)
-- Wind, and four weapons: Missile, Big Bomb, Triple, and the **Drill** (2 per round), which bores straight
+- No wind: shells fly on gravity alone. Four weapons: Missile, Big Bomb, Triple, and the **Drill** (2 per round), which bores straight
   through the earth to hit a tank behind a hill, burst out the far side, or break into a cavern and collapse it
 - Land a hit, then type A-S-D-F within 3 seconds to spin the supply-drop wheel for a one-shot special:
   Nuke, MIRV, Dirt Bomb, Bouncer, Airstrike, Teleport, Vampire, **Orbital Strike** (satellite laser),
