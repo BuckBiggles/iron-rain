@@ -15,6 +15,8 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
 - **Teams mode** (3–4 tanks): in the armory switch FREE-FOR-ALL → TEAMS and pick ALPHA or BRAVO; CPUs fill the smaller side.
   Last team standing wins and every member scores. Friendly fire hurts, but only hits on enemies earn a supply drop.
 - Ground that behaves like loose sand: steep slopes slump, craters cave in, dirt piles spread into dunes
+- **Underground caverns** on every map: a blast nearby caves one in, the ground above sinks into the hole and any
+  tank on top goes down with it (neighbouring caverns can chain-collapse)
 - Wind, and three weapons (Missile, Big Bomb, Triple)
 - Land a hit, then type A-S-D-F within 3 seconds to spin the supply-drop wheel for a one-shot special:
   Nuke, MIRV, Dirt Bomb, Bouncer, Airstrike, Teleport, Vampire, **Orbital Strike** (satellite laser),
