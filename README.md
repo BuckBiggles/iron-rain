@@ -1,6 +1,6 @@
 # Scorched Tanks
 
-A Scorched Earth-style artillery game that runs in a single HTML file. No build step, no server.
+A Scorched Earth-style armored-artillery game with a military look, in a single HTML file. No build step, no server.
 
 **Play:** https://buckbiggles.github.io/scorched-tanks/
 

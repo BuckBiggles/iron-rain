@@ -42,25 +42,29 @@ const SPECIALS = [
   {name:'VAMPIRE',   icon:'🧛', color:'#a855f7', desc:'Heals you by damage dealt', radius:40, damage:55, shots:1, kind:'vamp'},
 ];
 const CHILD = {name:'Child', color:'#ffd0a0', radius:26, damage:35, shots:1, kind:'child'};
-const COLORS = ['#4ade80', '#f87171', '#60a5fa', '#facc15'];
+// squad colors: olive drab, desert tan, steel blue, brick red — muted but still easy to tell apart
+const COLORS = ['#86a64a', '#d4a95c', '#6f93b3', '#c0583d'];
 const ALLW = [...WEAPONS, ...SPECIALS, CHILD];   // index = id used on the wire
+const FONT = '"Bahnschrift SemiBold Condensed","Bahnschrift","Agency FB","Arial Narrow","Segoe UI",sans-serif';
+const INK = '#e6e0c4', INK_DIM = 'rgba(230,224,196,.62)';   // khaki "stencil paint" text on dark steel
 
+// war-torn battlefields: overcast, smoky dusk, night (green-tinted), arid. haze = smoke/fog colour, ruin = silhouette colour
 const THEMES = [
-  {name:'Day', sky:['#3f94f2', '#9ad4ff', '#ffe8b5'], sun:{x:.78, y:.2, r:30, c:'#fffbe0', glow:'rgba(255,244,190,.85)'}, stars:0,
-   cloud:'#ffffff', mtn:['#7da2c9', '#587fa6'], top:'#4f9a22', grass:'#86d63e', dirt:['#a8702f', '#6e4219', '#3b220b']},
-  {name:'Sunset', sky:['#2a1458', '#b8325a', '#ffb347'], sun:{x:.22, y:.5, r:44, c:'#ffe3a0', glow:'rgba(255,170,90,.9)'}, stars:40,
-   cloud:'#ff9bb0', mtn:['#73305e', '#431a48'], top:'#6a8f27', grass:'#b2d848', dirt:['#9a5c2e', '#63361a', '#34190b']},
-  {name:'Night', sky:['#040913', '#101f48', '#2b3d78'], sun:{x:.8, y:.2, r:26, c:'#f4f6ff', glow:'rgba(170,190,255,.7)'}, stars:150, moon:true,
-   cloud:'#3c4d84', mtn:['#1a2a55', '#0f1a39'], top:'#2c8a57', grass:'#4fd18b', dirt:['#5b4b66', '#3a2f46', '#1d1727']},
-  {name:'Desert', sky:['#ff8c5a', '#ffc984', '#fff1c9'], sun:{x:.7, y:.26, r:36, c:'#fff4d0', glow:'rgba(255,230,160,.9)'}, stars:0,
-   cloud:'#ffe9cc', mtn:['#c98458', '#9c5e3b'], top:'#c99b44', grass:'#efc86a', dirt:['#cf9253', '#92602e', '#5b3716']},
+  {name:'Overcast', sky:['#6d7a80', '#98a5a6', '#c3c6b8'], sun:{x:.76, y:.2, r:26, c:'#eef0dd', glow:'rgba(240,240,220,.55)'}, stars:0,
+   cloud:'#aeb4b0', haze:'90,92,84', ruin:'#3d4640', mtn:['#7b8780', '#5c6a62'], top:'#566337', grass:'#7d8c49', dirt:['#6e5a3a', '#4a3b25', '#2a2114']},
+  {name:'Dusk', sky:['#2b2a33', '#7a4a3a', '#d9894a'], sun:{x:.24, y:.52, r:40, c:'#ffd9a0', glow:'rgba(255,150,70,.8)'}, stars:30,
+   cloud:'#8f5b48', haze:'70,48,40', ruin:'#241c1a', mtn:['#5b3b36', '#3a2624'], top:'#5d6234', grass:'#8b8f4c', dirt:['#6a4a30', '#46301f', '#241810']},
+  {name:'Night', sky:['#05090a', '#0c1a16', '#1e3a30'], sun:{x:.8, y:.2, r:24, c:'#dbe8d4', glow:'rgba(150,210,170,.45)'}, stars:120, moon:true,
+   cloud:'#27403a', haze:'30,56,48', ruin:'#050a08', mtn:['#14261f', '#0a1511'], top:'#2f5a3a', grass:'#4f9a5e', dirt:['#3f4a35', '#2a3223', '#141a10']},
+  {name:'Arid', sky:['#a6866a', '#d1b385', '#ecd9ac'], sun:{x:.7, y:.26, r:32, c:'#fff3cf', glow:'rgba(255,235,170,.75)'}, stars:0,
+   cloud:'#d9c8a2', haze:'176,150,110', ruin:'#6e5a43', mtn:['#b89a74', '#8f7552'], top:'#a2874a', grass:'#c6aa66', dirt:['#a98558', '#7a5c38', '#45331d']},
 ];
 
 // ====================================================== state
 let ground, tanks = [], shots = [], parts = [], rings = [], flashes = [], popups = [], scorches = [];
 let pending = [], hit = [false, false, false, false];
 let wind = 0, turn = 0, state = 'aim', wins = [0, 0, 0, 0], winner = -1;
-let theme = THEMES[0], bgCanvas, texCanvas, clouds = [], stars = [], streaks = [], menuTanks = [];
+let theme = THEMES[0], bgCanvas, texCanvas, vigCanvas, clouds = [], stars = [], streaks = [], menuTanks = [];
 let numPlayers = 2, numHumans = 1, menuStage = 'home';
 let mode = 'menu', paused = false, assist = true, muted = false;
 const TURN_SECONDS = 45, QTE_FRAMES = 60;   // 1-second key combo after a hit
@@ -107,12 +111,14 @@ const sfx = {
 };
 
 // ====================================================== helpers (drawing)
+// every "rounded" box in the UI is drawn with chamfered (cut) corners instead — hard-edged, steel-plate look
 function rr(x, y, w, h, r) {
-  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  const c = Math.max(1, Math.min(r * .5, w / 2, h / 2, 9));
+  ctx.beginPath(); ctx.moveTo(x + c, y); ctx.lineTo(x + w - c, y); ctx.lineTo(x + w, y + c); ctx.lineTo(x + w, y + h - c);
+  ctx.lineTo(x + w - c, y + h); ctx.lineTo(x + c, y + h); ctx.lineTo(x, y + h - c); ctx.lineTo(x, y + c); ctx.closePath();
 }
 function text(s, x, y, size, color, align = 'left', weight = '600', outline) {
-  ctx.font = `${weight} ${size}px "Segoe UI", system-ui, sans-serif`;
+  ctx.font = `${weight} ${size}px ${FONT}`;
   ctx.textAlign = align; ctx.textBaseline = 'middle';
   if (outline) { ctx.lineWidth = Math.max(3, size / 6); ctx.strokeStyle = outline; ctx.lineJoin = 'round'; ctx.strokeText(s, x, y); }
   ctx.fillStyle = color; ctx.fillText(s, x, y);
@@ -123,11 +129,25 @@ function shade(hex, f) {
 }
 function glow(color, blur) { ctx.shadowColor = color; ctx.shadowBlur = blur; }
 function noGlow() { ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; }
-function panel(x, y, w, h, r = 14, border = 'rgba(255,255,255,.14)', bw = 1.5) {
+function panel(x, y, w, h, r = 14, border = 'rgba(214,204,150,.30)', bw = 1.5) {
   rr(x, y, w, h, r);
   const g = ctx.createLinearGradient(0, y, 0, y + h);
-  g.addColorStop(0, 'rgba(24,28,48,.86)'); g.addColorStop(1, 'rgba(8,10,20,.86)');
+  g.addColorStop(0, 'rgba(38,42,30,.92)'); g.addColorStop(1, 'rgba(16,18,13,.94)');     // dark gunmetal / olive steel
   ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = border; ctx.lineWidth = bw; ctx.stroke();
+  if (w > 120 && h > 34) {   // rivets + inner bevel line
+    const sh = ctx.shadowBlur; ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(214,204,150,.32)';
+    for (const [px, py] of [[x + 7, y + 7], [x + w - 7, y + 7], [x + 7, y + h - 7], [x + w - 7, y + h - 7]]) { ctx.beginPath(); ctx.arc(px, py, 1.7, 0, TAU); ctx.fill(); }
+    ctx.strokeStyle = 'rgba(255,255,255,.06)'; ctx.lineWidth = 1; rr(x + 3.5, y + 3.5, w - 7, h - 7, r - 2); ctx.stroke();
+    ctx.shadowBlur = sh;
+  }
+}
+// diagonal yellow/black warning stripes inside a box
+function hazard(x, y, w, h, alpha = 1) {
+  ctx.save(); ctx.globalAlpha = alpha; rr(x, y, w, h, 4); ctx.clip();
+  ctx.fillStyle = '#d4a417'; ctx.fillRect(x, y, w, h); ctx.fillStyle = '#17160f';
+  for (let sx = x - h; sx < x + w + h; sx += 16) { ctx.beginPath(); ctx.moveTo(sx, y + h); ctx.lineTo(sx + 8, y + h); ctx.lineTo(sx + 8 + h, y); ctx.lineTo(sx + h, y); ctx.closePath(); ctx.fill(); }
+  ctx.restore();
 }
 
 // ====================================================== scene generation
@@ -160,6 +180,41 @@ function renderBG() {
     for (let x = 0; x <= W + 8; x += 8) g.lineTo(x, base - amp * (Math.abs(Math.sin(x * .005 * (li + 1) + p1)) * .7 + Math.abs(Math.sin(x * .014 + p2)) * .3));
     g.lineTo(W, H); g.fill();
   });
+  // distant war-torn skyline: shelled buildings, dead trees, utility poles, burning wrecks with smoke columns
+  const base = H * .6;
+  g.fillStyle = theme.ruin; g.strokeStyle = theme.ruin;
+  const fires = [];
+  for (let x = rnd(0, 50); x < W;) {
+    const kind = Math.random();
+    if (kind < .42) {                                   // ruined building
+      const bw = rnd(28, 64), bh = rnd(34, 92);
+      g.beginPath(); g.moveTo(x, base + 30); g.lineTo(x, base - bh * rnd(.5, 1));
+      for (let k = 1; k <= 5; k++) g.lineTo(x + bw * k / 5, base - bh * rnd(.55, 1.05));
+      g.lineTo(x + bw, base + 30); g.closePath(); g.fill();
+      g.fillStyle = 'rgba(0,0,0,.42)';                  // blown-out windows
+      for (let wy = base - bh * .75; wy < base - 4; wy += 15) for (let wx = x + 5; wx < x + bw - 8; wx += 12) if (Math.random() < .6) g.fillRect(wx, wy, 6, 8);
+      g.fillStyle = theme.ruin;
+      if (Math.random() < .3) fires.push(x + bw * rnd(.2, .8));
+      x += bw + rnd(18, 80);
+    } else if (kind < .78) {                            // dead tree
+      const th = rnd(30, 62); g.lineWidth = 3; g.beginPath(); g.moveTo(x, base + 20); g.lineTo(x + rnd(-3, 3), base - th); g.stroke();
+      g.lineWidth = 1.6; for (let k = 0; k < 4; k++) { const by = base - th * rnd(.3, 1), d = Math.random() < .5 ? -1 : 1; g.beginPath(); g.moveTo(x, by); g.lineTo(x + d * rnd(8, 18), by - rnd(6, 16)); g.stroke(); }
+      x += rnd(26, 70);
+    } else {                                            // utility pole with sagging wire
+      const ph = rnd(60, 90); g.lineWidth = 3; g.beginPath(); g.moveTo(x, base + 20); g.lineTo(x, base - ph); g.stroke();
+      g.lineWidth = 2; g.beginPath(); g.moveTo(x - 10, base - ph + 8); g.lineTo(x + 10, base - ph + 8); g.stroke();
+      g.lineWidth = 1; g.beginPath(); g.moveTo(x + 10, base - ph + 8); g.quadraticCurveTo(x + 70, base - ph + 34, x + 140, base - ph + 8); g.stroke();
+      x += rnd(100, 160);
+    }
+  }
+  for (const [i, fx] of fires.slice(0, 3).entries()) {  // smoke columns rising from the wrecks
+    if (theme.name !== 'Arid' || i === 0) { const fg = g.createRadialGradient(fx, base - 6, 0, fx, base - 6, 46); fg.addColorStop(0, 'rgba(255,150,50,.55)'); fg.addColorStop(1, 'rgba(255,100,20,0)'); g.fillStyle = fg; g.fillRect(fx - 50, base - 56, 100, 100); }
+    let px = fx, py = base - 12;
+    for (let j = 0; j < 46; j++) {
+      px += rnd(-.5, 1.6); py -= rnd(5, 8); const pr = 7 + j * .85;
+      g.fillStyle = `rgba(${theme.haze},${Math.max(0, .26 - j * .0045)})`; g.beginPath(); g.arc(px, py, pr, 0, TAU); g.fill();
+    }
+  }
   const haze = g.createLinearGradient(0, H * .5, 0, H * .85);
   haze.addColorStop(0, 'rgba(255,255,255,0)'); haze.addColorStop(1, 'rgba(255,255,255,.12)');
   g.fillStyle = haze; g.fillRect(0, H * .5, W, H * .4);
@@ -222,11 +277,11 @@ function beginTurn(t) {
   emit({t: 'turn', i: t});
 }
 function pivot(t) {   // world position of the turret pivot, accounting for hull tilt
-  return {x: t.x + 19 * Math.sin(t.tilt), y: t.y + 4 - 19 * Math.cos(t.tilt)};
+  return {x: t.x + 22 * Math.sin(t.tilt), y: t.y + 4 - 22 * Math.cos(t.tilt)};
 }
 function muzzle(t) {
   const p = pivot(t), a = t.angle * Math.PI / 180;
-  return {x: p.x + Math.cos(a) * 26, y: p.y - Math.sin(a) * 26};
+  return {x: p.x + Math.cos(a) * 30, y: p.y - Math.sin(a) * 30};
 }
 
 // ====================================================== effects
@@ -298,8 +353,8 @@ function applyEvent(e) {
   switch (e.t) {
     case 'turn': {
       const t = tanks[e.i]; if (!t) return;
-      banner = {t: 0, text: `PLAYER ${e.i + 1}'S TURN`, color: t.color,
-                sub: t.ai ? 'CPU' : (net ? (isMine(t) ? 'YOUR SHOT' : 'ONLINE PLAYER') : 'YOUR SHOT')};
+      banner = {t: 0, text: `UNIT ${e.i + 1} — FIRE MISSION`, color: t.color,
+                sub: t.ai ? 'CPU' : (net ? (isMine(t) ? 'YOUR ORDERS' : 'ALLIED COMMAND') : 'YOUR ORDERS')};
       if (net && isMine(t) && !t.ai) sfx.prize();
       break;
     }
@@ -346,7 +401,7 @@ function explode(x, y, w, owner) {
     emit({t: 'warp', x: t.x, y: t.y - 8});
     t.x = nx; t.y = ground[Math.floor(nx)] - 4; t.vy = 0; t.tilt = tiltAt(nx);
     emit({t: 'warp', x: t.x, y: t.y - 8});
-    emit({t: 'pop', x: t.x, y: t.y - 56, s: 'WARP!', c: '#5eead4', z: 22});
+    emit({t: 'pop', x: t.x, y: t.y - 56, s: 'REDEPLOYED!', c: '#5eead4', z: 22});
     emit({t: 'sfx', n: 'prize'});
     return;
   }
@@ -522,7 +577,7 @@ function updateGame() {
       q.t++;
       if (tanks[turn].ai && !q.ai) q.ai = {next: 14, failAt: Math.random() < .65 ? -1 : Math.floor(rnd(1, 4))};   // CPU nails it ~65% of the time
       if (q.ai && --q.ai.next <= 0) { qteKey(q.idx === q.ai.failAt ? 'x' : q.seq[q.idx]); q.ai.next = Math.floor(rnd(8, 13)); }
-      if (!q.done && q.t > q.limit) qteEnd(false, 'TOO SLOW!');
+      if (!q.done && q.t > q.limit) qteEnd(false, 'TIMED OUT!');
     } else if (++q.resT > 55) { qte = null; if (q.ok) startWheel(); else beginTurn(nextAlive(turn)); }
   }
 
@@ -564,8 +619,8 @@ function startWheel() {
 function qteKey(k) {
   const q = qte;
   if (state !== 'quick' || !q || q.done) return;
-  if (k === q.seq[q.idx]) { q.idx++; emit({t: 'sfx', n: 'tick'}); if (q.idx >= q.seq.length) qteEnd(true, 'NICE!'); }
-  else qteEnd(false, 'WRONG KEY!');
+  if (k === q.seq[q.idx]) { q.idx++; emit({t: 'sfx', n: 'tick'}); if (q.idx >= q.seq.length) qteEnd(true, 'AUTHORIZED!'); }
+  else qteEnd(false, 'ACCESS DENIED!');
 }
 function qteEnd(ok, msg) {
   const q = qte, t = tanks[turn];
@@ -832,48 +887,75 @@ function drawWindStreaks() {
   ctx.stroke();
 }
 
+function poly(pts) { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); }
+function star(cx, cy, r) { ctx.beginPath(); for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, q = i % 2 ? r * .42 : r; ctx.lineTo(cx + Math.cos(a) * q, cy + Math.sin(a) * q); } ctx.closePath(); }
+const CAMO = [[-11, -14, 8, 3.2, .25], [4, -16, 9, 3, -.3], [13, -13.5, 5.5, 3.4, .5], [-3, -12.5, 6.5, 2.6, 0]];   // hull camo blotches: x, y, rx, ry, rot
+
 function drawTank(t, active) {
-  const dead = t.hp <= 0, col = dead ? '#3a3a40' : t.color;
+  const dead = t.hp <= 0, col = dead ? '#34332e' : t.color;
+  const dark = shade(col, -.38), light = shade(col, .22);
   ctx.save(); ctx.translate(t.x, t.y + 4);
-  ctx.fillStyle = 'rgba(0,0,0,.28)'; ctx.beginPath(); ctx.ellipse(0, 1, 22, 3.5, 0, 0, TAU); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,.32)'; ctx.beginPath(); ctx.ellipse(0, 1, 24, 3.6, 0, 0, TAU); ctx.fill();
   ctx.rotate(t.tilt);
-  // treads
-  rr(-19, -10, 38, 10, 5); ctx.fillStyle = dead ? '#1a1a1e' : '#1d1e26'; ctx.fill();
-  ctx.fillStyle = '#4a4d5a';
-  for (let x = -13; x <= 13; x += 6.5) { ctx.beginPath(); ctx.arc(x, -5, 3.4, 0, TAU); ctx.fill(); }
-  ctx.fillStyle = '#7b7f90';
-  for (let x = -13; x <= 13; x += 6.5) { ctx.beginPath(); ctx.arc(x, -5, 1.2, 0, TAU); ctx.fill(); }
-  // hull
-  const hg = ctx.createLinearGradient(0, -19, 0, -9);
-  hg.addColorStop(0, shade(col, .35)); hg.addColorStop(1, shade(col, -.3));
-  rr(-16, -19, 32, 10, 3.5); ctx.fillStyle = hg; ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 1; ctx.stroke();
-  ctx.fillStyle = 'rgba(255,255,255,.25)'; ctx.fillRect(-13, -17.5, 26, 1.5);
-  // barrel
-  ctx.save();
-  ctx.translate(0, -19); ctx.rotate(-t.tilt);
-  ctx.rotate(dead ? Math.PI * .2 : -t.angle * Math.PI / 180);
-  const bg = ctx.createLinearGradient(0, -3, 0, 3); bg.addColorStop(0, '#e9ecf4'); bg.addColorStop(1, '#8a8fa0');
-  ctx.fillStyle = bg; ctx.fillRect(-t.recoil, -2.8, 24, 5.6);
-  ctx.fillStyle = shade(col, -.25); ctx.fillRect(19 - t.recoil, -3.8, 6, 7.6);
+  // tracks + road wheels
+  poly([[-22, -3], [-19, -10.5], [19, -10.5], [22, -3], [18, 0.5], [-18, 0.5]]); ctx.fillStyle = '#171813'; ctx.fill();
+  ctx.strokeStyle = '#3d3f33'; ctx.lineWidth = 1; ctx.stroke();
+  for (let x = -14; x <= 14; x += 7) {
+    ctx.fillStyle = '#34362c'; ctx.beginPath(); ctx.arc(x, -4.8, 3.7, 0, TAU); ctx.fill();
+    ctx.strokeStyle = '#0c0d0a'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = '#6a6e5a'; ctx.beginPath(); ctx.arc(x, -4.8, 1.3, 0, TAU); ctx.fill();
+  }
+  ctx.fillStyle = dark; poly([[-21, -9.5], [21, -9.5], [18.5, -12.5], [-18.5, -12.5]]); ctx.fill();   // side skirt
+  // hull: sloped glacis, angular
+  const hull = [[-17, -12.5], [17, -12.5], [21, -15], [15.5, -19.5], [-15.5, -19.5], [-21, -15]];
+  const hg = ctx.createLinearGradient(0, -19.5, 0, -12.5); hg.addColorStop(0, light); hg.addColorStop(1, dark);
+  poly(hull); ctx.fillStyle = hg; ctx.fill();
+  ctx.save(); poly(hull); ctx.clip();
+  ctx.fillStyle = dead ? '#23221e' : dark; for (const [cx, cy, rx, ry, rot] of CAMO) { ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, rot, 0, TAU); ctx.fill(); }
+  ctx.fillStyle = dead ? '#2a2924' : 'rgba(70,58,34,.55)'; for (const [cx, cy, rx, ry, rot] of CAMO) { ctx.beginPath(); ctx.ellipse(cx + 7, cy + 2.5, rx * .55, ry * .7, -rot, 0, TAU); ctx.fill(); }
   ctx.restore();
-  // dome
-  const dg = ctx.createRadialGradient(-3, -24, 1, 0, -20, 12);
-  dg.addColorStop(0, shade(col, .55)); dg.addColorStop(1, shade(col, -.25));
-  ctx.beginPath(); ctx.ellipse(0, -19, 11, 9, 0, Math.PI, 0); ctx.closePath(); ctx.fillStyle = dg; ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.stroke();
-  ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.beginPath(); ctx.arc(2, -23, 2.4, 0, TAU); ctx.fill();
+  poly(hull); ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = 'rgba(0,0,0,.45)'; for (let i = 0; i < 4; i++) ctx.fillRect(-14 + i * 2.4, -17.6, 1.4, 3);   // engine louvers
+  if (!dead) {
+    ctx.fillStyle = INK; ctx.globalAlpha = .85; star(13, -15.2, 2.6); ctx.fill(); ctx.globalAlpha = 1;   // allied star insignia
+    ctx.fillStyle = '#f5e9a8'; ctx.fillRect(18.6, -15.4, 2, 1.6);                                          // headlamp
+  }
+  // main gun: thermal sleeve + bore + muzzle brake (pivot is (0, -22) in tank space)
+  ctx.save();
+  ctx.translate(0, -22); ctx.rotate(-t.tilt);
+  ctx.rotate(dead ? Math.PI * .2 : -t.angle * Math.PI / 180);
+  const r = t.recoil;
+  ctx.fillStyle = '#2b2d25'; ctx.fillRect(-r, -2.2, 29, 4.4);
+  const sg = ctx.createLinearGradient(0, -3.6, 0, 3.6); sg.addColorStop(0, shade(col, .1)); sg.addColorStop(.5, dark); sg.addColorStop(1, shade(col, -.55));
+  ctx.fillStyle = sg; ctx.fillRect(5 - r, -3.6, 15, 7.2);
+  ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fillRect(5 - r, -.3, 15, .7);
+  ctx.fillStyle = '#1d1e19'; ctx.fillRect(24 - r, -3.6, 5.5, 7.2);                      // muzzle brake
+  ctx.fillStyle = '#4b4e40'; ctx.fillRect(25.5 - r, -3.6, 1, 7.2); ctx.fillRect(27.5 - r, -3.6, 1, 7.2);
+  ctx.restore();
+  // turret: faceted
+  const tur = [[-12, -19.5], [12, -19.5], [10.5, -24.5], [3.5, -28], [-7.5, -28], [-11.5, -24]];
+  const tg = ctx.createLinearGradient(0, -28, 0, -19.5); tg.addColorStop(0, light); tg.addColorStop(1, dark);
+  poly(tur); ctx.fillStyle = tg; ctx.fill();
+  ctx.save(); poly(tur); ctx.clip(); ctx.fillStyle = dead ? '#23221e' : dark; ctx.beginPath(); ctx.ellipse(-6, -24, 6, 3, .3, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.ellipse(7, -21.5, 5, 2.4, -.2, 0, TAU); ctx.fill(); ctx.restore();
+  poly(tur); ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.fillStyle = '#1d1e19'; ctx.beginPath(); ctx.ellipse(-3.5, -28.4, 3.4, 1.4, 0, 0, TAU); ctx.fill();   // commander hatch
+  ctx.fillStyle = '#2b2d25'; ctx.fillRect(2.5, -31.5, 4.5, 3.4);                                              // sight block
+  if (!dead) {
+    ctx.fillStyle = '#9ec6a0'; ctx.globalAlpha = .75; ctx.fillRect(5.2, -30.4, 1.6, 1.2); ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#1b1c18'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(-9, -27.5); ctx.lineTo(-13, -43); ctx.stroke();   // whip antenna
+    ctx.fillStyle = INK; ctx.globalAlpha = .8; star(-1.5, -22.5, 2.3); ctx.fill(); ctx.globalAlpha = 1;
+  }
   ctx.restore();
   if (dead) return;
-  // tag above tank
-  text('P' + (t.i + 1), t.x, t.y - 42, 12, '#fff', 'center', '800', 'rgba(0,0,0,.7)');
-  rr(t.x - 18, t.y - 35, 36, 6, 3); ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fill();
+  // unit tag + armor bar above the tank
+  text('0' + (t.i + 1), t.x, t.y - 54, 12, INK, 'center', '800', 'rgba(0,0,0,.75)');
+  rr(t.x - 19, t.y - 49, 38, 6, 2); ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fill();
   const hp = clamp(t.shownHp / 100, 0, 1);
-  rr(t.x - 17, t.y - 34, 34 * hp, 4, 2); ctx.fillStyle = hp > .5 ? '#4ade80' : hp > .25 ? '#facc15' : '#ef4444'; ctx.fill();
+  if (hp > .01) { rr(t.x - 18, t.y - 48, 36 * hp, 4, 1); ctx.fillStyle = hp > .5 ? '#9cc255' : hp > .25 ? '#e0b23c' : '#d6492f'; ctx.fill(); }
   if (active) {
     const b = Math.sin(T * .12) * 3;
     ctx.save(); glow(t.color, 12); ctx.fillStyle = t.color;
-    ctx.beginPath(); ctx.moveTo(t.x, t.y - 55 + b); ctx.lineTo(t.x - 8, t.y - 67 + b); ctx.lineTo(t.x + 8, t.y - 67 + b); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(t.x, t.y - 61 + b); ctx.lineTo(t.x - 8, t.y - 73 + b); ctx.lineTo(t.x + 8, t.y - 73 + b); ctx.closePath(); ctx.fill();
     ctx.restore();
   }
 }
@@ -894,7 +976,7 @@ function drawAimHelpers(t) {
   if (assist && !t.ai && isMine(t)) {
     const pts = previewPoints(t);
     pts.forEach(([x, y], i) => {
-      ctx.globalAlpha = 1 - i / pts.length * .85; ctx.fillStyle = '#fff'; ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 1 - i / pts.length * .85; ctx.fillStyle = '#ffe08a'; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(x, y, 2.6, 0, TAU); ctx.stroke(); ctx.fill();
     });
     ctx.globalAlpha = 1;
@@ -967,6 +1049,13 @@ function drawWorld(actors) {
   if (mode === 'play' && state === 'aim' && !paused) drawAimHelpers(tanks[turn]);
   drawShots(); drawParts();
   ctx.restore();
+  if (!vigCanvas) {   // darkened corners + a faint olive grade, like a battlefield camera feed
+    vigCanvas = document.createElement('canvas'); vigCanvas.width = W; vigCanvas.height = H;
+    const v = vigCanvas.getContext('2d'), vg = v.createRadialGradient(W / 2, H / 2, H * .42, W / 2, H / 2, W * .66);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(6,8,4,.5)'); v.fillStyle = vg; v.fillRect(0, 0, W, H);
+    v.fillStyle = 'rgba(60,70,30,.07)'; v.fillRect(0, 0, W, H);
+  }
+  ctx.drawImage(vigCanvas, 0, 0);
   if (whiteFlash > .02) { ctx.fillStyle = `rgba(255,255,255,${whiteFlash})`; ctx.fillRect(0, 0, W, H); }
 }
 
@@ -978,27 +1067,22 @@ function drawCards() {
     ctx.save();
     if (t.hp <= 0) ctx.globalAlpha = .45;
     if (act) glow(t.color, 16);
-    panel(x, y, cw, h, 12, act ? t.color : 'rgba(255,255,255,.14)', act ? 2.4 : 1.2);
+    panel(x, y, cw, h, 12, act ? t.color : 'rgba(214,204,150,.26)', act ? 2.4 : 1.2);
     noGlow();
-    // badge
-    ctx.fillStyle = t.color; ctx.beginPath(); ctx.arc(x + 26, y + 31, 16, 0, TAU); ctx.fill();
-    ctx.strokeStyle = 'rgba(0,0,0,.4)'; ctx.lineWidth = 2; ctx.stroke();
-    text(t.hp <= 0 ? '☠' : 'P' + (i + 1), x + 26, y + 32, t.hp <= 0 ? 18 : 15, '#0b0d14', 'center', '900');
-    text('PLAYER ' + (i + 1), x + 52, y + 17, 13, '#fff', 'left', '800');
+    // unit plate: stencilled number on a team-coloured steel plate
+    const pg = ctx.createLinearGradient(0, y + 14, 0, y + 48); pg.addColorStop(0, shade(t.color, .15)); pg.addColorStop(1, shade(t.color, -.35));
+    rr(x + 10, y + 14, 34, 34, 8); ctx.fillStyle = pg; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 2; ctx.stroke();
+    text(t.hp <= 0 ? '✕' : '0' + (i + 1), x + 27, y + 32, t.hp <= 0 ? 22 : 20, '#15160f', 'center', '900');
+    text('UNIT 0' + (i + 1), x + 52, y + 17, 13, INK, 'left', '800');
     const you = net && i === net.seat;
-    text(t.ai ? 'CPU' : you ? 'YOU' : 'HUMAN', x + cw - 12, y + 17, 11, you ? t.color : 'rgba(255,255,255,.5)', 'right', you ? '900' : '700');
-    // hp
-    rr(x + 52, y + 29, cw - 104, 12, 6); ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fill();
-    const hp = clamp(t.shownHp / 100, 0, 1);
-    if (hp > .01) {
-      const g = ctx.createLinearGradient(0, y + 29, 0, y + 41);
-      const base = hp > .5 ? '#4ade80' : hp > .25 ? '#facc15' : '#ef4444';
-      g.addColorStop(0, shade(base, .35)); g.addColorStop(1, shade(base, -.15));
-      rr(x + 52, y + 29, (cw - 104) * hp, 12, 6); ctx.fillStyle = g; ctx.fill();
-    }
-    text(String(Math.max(0, Math.round(t.hp))), x + cw - 46, y + 33, 13, '#fff', 'left', '800');
-    text('★'.repeat(Math.min(wins[i], 6)) + (wins[i] > 6 ? ' ×' + wins[i] : '') || '', x + 52, y + 51, 12, '#fcd34d', 'left', '700');
-    if (!wins[i]) text('no wins yet', x + 52, y + 51, 10.5, 'rgba(255,255,255,.35)', 'left', '600');
+    text(t.ai ? 'CPU' : you ? 'YOU' : 'OPERATOR', x + cw - 12, y + 17, 11, you ? t.color : INK_DIM, 'right', you ? '900' : '700');
+    // armor: segmented bar
+    const bx = x + 52, bw = cw - 104, hp = clamp(t.shownHp / 100, 0, 1), segs = 20, sw = (bw - (segs - 1) * 1.5) / segs, lit = Math.ceil(hp * segs - .001);
+    const base = hp > .5 ? '#9cc255' : hp > .25 ? '#e0b23c' : '#d6492f';
+    for (let k = 0; k < segs; k++) { ctx.fillStyle = k < lit ? base : 'rgba(255,255,255,.08)'; ctx.fillRect(bx + k * (sw + 1.5), y + 29, sw, 12); }
+    text(String(Math.max(0, Math.round(t.hp))), x + cw - 46, y + 33, 13, INK, 'left', '800');
+    text('★'.repeat(Math.min(wins[i], 6)) + (wins[i] > 6 ? ' ×' + wins[i] : '') || '', x + 52, y + 51, 12, '#e2b93a', 'left', '700');
+    if (!wins[i]) text('NO VICTORIES', x + 52, y + 51, 10, 'rgba(230,224,196,.32)', 'left', '700');
     if (t.special) {
       const pulse = 1 + Math.sin(T * .15) * .08;
       ctx.save(); glow(t.special.color, 14); ctx.fillStyle = t.special.color + '55';
@@ -1012,10 +1096,10 @@ function drawCards() {
 function drawWind() {
   const cx = W / 2, y = 94, w = 230, h = 24;
   panel(cx - w / 2, y - h / 2, w, h, 12);
-  text('WIND', cx - w / 2 + 14, y + 1, 11, 'rgba(255,255,255,.6)', 'left', '800');
+  text('WIND', cx - w / 2 + 14, y + 1, 11, INK_DIM, 'left', '800');
   const mid = cx + 12, half = 62, f = wind / 10;
   rr(mid - half, y - 4, half * 2, 8, 4); ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fill();
-  ctx.fillStyle = '#93c5fd';
+  ctx.fillStyle = '#d8b24a';
   if (wind) { rr(f > 0 ? mid : mid + f * half, y - 4, Math.abs(f) * half, 8, 4); ctx.fill(); }
   ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.fillRect(mid - 1, y - 7, 2, 14);
   text(wind === 0 ? 'calm' : (wind < 0 ? '◀ ' : '') + Math.abs(wind) + (wind > 0 ? ' ▶' : ''), cx + w / 2 - 12, y + 1, 12, '#fff', 'right', '800');
@@ -1038,20 +1122,20 @@ function drawControlPanel() {
   ctx.save(); glow(col, 8); ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.lineCap = 'round';
   ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx + Math.cos(a) * (gr - 4), gy - Math.sin(a) * (gr - 4)); ctx.stroke(); ctx.restore();
   ctx.fillStyle = col; ctx.beginPath(); ctx.arc(gx, gy, 4, 0, TAU); ctx.fill();
-  text(Math.round(t.angle) + '°', gx, gy - 20, 18, '#fff', 'center', '800');
+  text(Math.round(t.angle) + '°', gx, gy - 20, 18, INK, 'center', '800');
   text('ANGLE', gx, y0 + 12, 10, 'rgba(255,255,255,.55)', 'center', '800');
   // power
   const px = 240, pw = 310;
-  text('POWER', px, y0 + 16, 11, 'rgba(255,255,255,.55)', 'left', '800');
-  text(String(Math.round(t.power)), px + pw, y0 + 16, 18, '#fff', 'right', '800');
+  text('POWER', px, y0 + 16, 11, INK_DIM, 'left', '800');
+  text(String(Math.round(t.power)), px + pw, y0 + 16, 18, INK, 'right', '800');
   const segs = 28, sw = (pw - (segs - 1) * 2) / segs, lit = Math.round(t.power / 100 * segs);
   for (let i = 0; i < segs; i++) {
-    const f = i / (segs - 1), c = f < .5 ? '#4ade80' : f < .8 ? '#facc15' : '#ef4444';
+    const f = i / (segs - 1), c = f < .5 ? '#9cc255' : f < .8 ? '#e0b23c' : '#d6492f';
     ctx.fillStyle = i < lit ? c : 'rgba(255,255,255,.09)'; rr(px + i * (sw + 2), y0 + 28, sw, 20, 2.5); ctx.fill();
   }
-  text('FUEL', px, y0 + 62, 10, 'rgba(255,255,255,.55)', 'left', '800');
+  text('FUEL', px, y0 + 62, 10, INK_DIM, 'left', '800');
   rr(px + 40, y0 + 58, pw - 40, 8, 4); ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fill();
-  if (t.fuel > 0) { rr(px + 40, y0 + 58, (pw - 40) * t.fuel / 60, 8, 4); ctx.fillStyle = '#38bdf8'; ctx.fill(); }
+  if (t.fuel > 0) { rr(px + 40, y0 + 58, (pw - 40) * t.fuel / 60, 8, 4); ctx.fillStyle = '#7fb3a0'; ctx.fill(); }
   // weapons
   const sx = 572, sy = y0 + 12, sw2 = 80, sh = 60;
   WEAPONS.forEach((wp, i) => {
@@ -1070,14 +1154,15 @@ function drawControlPanel() {
   ctx.save(); if (sp) glow(sp.color, 14 + Math.sin(T * .15) * 5);
   rr(x3, sy, 96, sh, 10); ctx.fillStyle = sp ? sp.color + '33' : 'rgba(255,255,255,.03)'; ctx.fill();
   ctx.strokeStyle = sp ? sp.color : 'rgba(255,255,255,.12)'; ctx.lineWidth = sp ? 2 : 1; ctx.setLineDash(sp ? [] : [4, 4]); ctx.stroke(); ctx.restore();
-  if (sp) { text(sp.icon, x3 + 48, sy + 24, 22, '#fff', 'center'); text(sp.name, x3 + 48, sy + 46, 11, '#fff', 'center', '800'); text('PRIZE', x3 + 8, sy + 10, 9, sp.color, 'left', '800'); }
-  else { text('PRIZE', x3 + 48, sy + 22, 11, 'rgba(255,255,255,.3)', 'center', '800'); text('hit to spin', x3 + 48, sy + 42, 10, 'rgba(255,255,255,.3)', 'center'); }
+  if (sp) { text(sp.icon, x3 + 48, sy + 24, 22, '#fff', 'center'); text(sp.name, x3 + 48, sy + 46, 11, '#fff', 'center', '800'); text('SUPPLY', x3 + 8, sy + 10, 9, sp.color, 'left', '800'); }
+  else { text('SUPPLY', x3 + 48, sy + 22, 11, 'rgba(230,224,196,.3)', 'center', '800'); text('earned by hits', x3 + 48, sy + 42, 10, 'rgba(230,224,196,.3)', 'center'); }
   // fire button
   const mineT = isMine(t) && !t.ai;
   const fx = x + w - 92, ready = state === 'aim' && mineT, p = ready ? 1 + Math.sin(T * .12) * .03 : 1;
   ctx.save(); ctx.translate(fx + 40, sy + 30); ctx.scale(p, p);
   if (ready) glow(col, 14);
   rr(-40, -30, 80, 60, 12); ctx.fillStyle = ready ? col : 'rgba(255,255,255,.08)'; ctx.fill(); noGlow();
+  if (ready) { hazard(-40, -30, 80, 8, .9); hazard(-40, 22, 80, 8, .9); }   // warning stripes on an armed trigger
   text(t.ai ? 'CPU' : mineT ? 'FIRE' : 'WAIT', 0, -6, 17, ready ? '#0b0d14' : 'rgba(255,255,255,.45)', 'center', '900');
   text(t.ai ? (state === 'aim' ? 'thinking…' : '') : mineT ? 'SPACE' : 'their turn', 0, 14, 10, ready ? 'rgba(0,0,0,.6)' : 'rgba(255,255,255,.4)', 'center', '800');
   ctx.restore();
@@ -1109,13 +1194,13 @@ function drawBanner() {
 
 function drawQuick() {
   const q = qte, t = tanks[turn], mine = isMine(t) && !t.ai, cx = W / 2, y0 = 140;
-  ctx.fillStyle = 'rgba(4,6,14,.5)'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(8,10,5,.55)'; ctx.fillRect(0, 0, W, H);
   const shakeX = q.done && !q.ok && q.resT < 12 ? Math.sin(q.resT * 2.2) * 8 : 0;   // shudder on a miss
   ctx.save(); ctx.translate(shakeX, 0);
   const col = q.done ? (q.ok ? '#4ade80' : '#ef4444') : t.color;
   glow(col, 26); panel(cx - 260, y0, 520, 206, 24, col, 3); noGlow();
-  text(mine ? 'DIRECT HIT!  PRESS THE KEYS IN ORDER' : `PLAYER ${turn + 1} SCORED A HIT!`, cx, y0 + 30, 21, '#fff', 'center', '900');
-  text(mine ? 'nail the combo to spin the prize wheel' : t.ai ? 'the CPU is going for the prize wheel…' : 'they\'re going for the prize wheel…', cx, y0 + 55, 12, 'rgba(255,255,255,.7)', 'center', '700');
+  text(mine ? 'TARGET HIT — ENTER THE AUTH CODE' : `UNIT 0${turn + 1} — TARGET HIT!`, cx, y0 + 30, 21, '#fff', 'center', '900');
+  text(mine ? 'key it in order to call in a supply drop' : t.ai ? 'the CPU is requesting a supply drop…' : 'requesting a supply drop…', cx, y0 + 55, 12, INK_DIM, 'center', '700');
   const sz = 72, gap = 14, x0 = cx - (4 * sz + 3 * gap) / 2, ty = y0 + 72;
   ctx.globalAlpha = q.done ? .22 : 1;   // fade the tiles so the result text reads clearly
   q.seq.forEach((k, i) => {
@@ -1139,17 +1224,17 @@ function drawQuick() {
 function drawWheel() {
   const n = SPECIALS.length, step = TAU / n, cx = W / 2, cy = H / 2 + 14, r = 168;
   const R = wheelAngle(wheel.t), t = tanks[turn], done = wheel.t >= wheel.spin;
-  ctx.fillStyle = 'rgba(4,6,14,.92)'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(8,10,5,.93)'; ctx.fillRect(0, 0, W, H);
   // rotating rays
   ctx.save(); ctx.translate(cx, cy); ctx.rotate(T * .004);
   for (let i = 0; i < 18; i++) { ctx.rotate(TAU / 18); ctx.fillStyle = 'rgba(255,255,255,.035)'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, 720, 0, TAU / 36); ctx.closePath(); ctx.fill(); }
   ctx.restore();
-  text(`PLAYER ${turn + 1} SCORED A HIT!`, cx, 52, 34, t.color, 'center', '900', 'rgba(0,0,0,.6)');
-  text(done ? 'PRIZE WON' : 'SPINNING FOR A PRIZE…', cx, 88, 15, 'rgba(255,255,255,.7)', 'center', '800');
+  text(`SUPPLY DROP — UNIT 0${turn + 1}`, cx, 52, 34, t.color, 'center', '900', 'rgba(0,0,0,.6)');
+  text(done ? 'SUPPLY DROP AUTHORIZED' : 'REQUISITIONING SUPPLIES…', cx, 88, 15, 'rgba(255,255,255,.7)', 'center', '800');
   // outer ring
   ctx.save(); glow(done ? SPECIALS[wheel.idx].color : '#facc15', 26);
-  ctx.beginPath(); ctx.arc(cx, cy, r + 20, 0, TAU); ctx.fillStyle = '#1b1f33'; ctx.fill(); noGlow();
-  ctx.strokeStyle = '#facc15'; ctx.lineWidth = 4; ctx.stroke(); ctx.restore();
+  ctx.beginPath(); ctx.arc(cx, cy, r + 20, 0, TAU); ctx.fillStyle = '#1d2016'; ctx.fill(); noGlow();
+  ctx.strokeStyle = '#d4a417'; ctx.lineWidth = 4; ctx.stroke(); ctx.restore();
   for (let i = 0; i < 28; i++) {
     const a = i / 28 * TAU, on = done ? (Math.floor(T / 6) % 2 === i % 2) : ((i + Math.floor(T / 3)) % 3 === 0);
     ctx.fillStyle = on ? '#fff7b0' : '#8a7a2a'; if (on) glow('#ffe66d', 10);
@@ -1159,7 +1244,7 @@ function drawWheel() {
   for (let i = 0; i < n; i++) {
     const a0 = R + i * step - Math.PI / 2, sp = SPECIALS[i], win = done && i === wheel.idx;
     const g = ctx.createRadialGradient(cx, cy, 10, cx, cy, r);
-    g.addColorStop(0, shade(sp.color, .3)); g.addColorStop(1, shade(sp.color, -.2));
+    g.addColorStop(0, shade(sp.color, .08)); g.addColorStop(1, shade(sp.color, -.42));
     ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, a0, a0 + step); ctx.closePath(); ctx.fill();
     if (win && Math.floor(T / 8) % 2) { ctx.fillStyle = 'rgba(255,255,255,.28)'; ctx.fill(); }
     ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2; ctx.stroke();
@@ -1168,9 +1253,9 @@ function drawWheel() {
     ctx.save(); ctx.translate(r - 112, 0); ctx.rotate(Math.PI / 2); text(sp.icon, 0, 0, 28, '#fff', 'center'); ctx.restore();
     ctx.restore();
   }
-  ctx.fillStyle = '#1b1f33'; ctx.beginPath(); ctx.arc(cx, cy, 24, 0, TAU); ctx.fill();
-  ctx.strokeStyle = '#facc15'; ctx.lineWidth = 3; ctx.stroke();
-  text('★', cx, cy + 1, 22, '#facc15', 'center', '900');
+  ctx.fillStyle = '#1d2016'; ctx.beginPath(); ctx.arc(cx, cy, 24, 0, TAU); ctx.fill();
+  ctx.strokeStyle = '#d4a417'; ctx.lineWidth = 3; ctx.stroke();
+  text('★', cx, cy + 1, 22, '#d4a417', 'center', '900');
   // pointer
   ctx.save(); ctx.translate(cx, cy - r - 24); ctx.rotate(wheel.flick * .35);
   glow('#000', 8); ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.moveTo(0, 38); ctx.lineTo(-15, 4); ctx.lineTo(15, 4); ctx.closePath(); ctx.fill();
@@ -1188,16 +1273,16 @@ function drawWheel() {
 }
 
 function drawOver() {
-  ctx.fillStyle = 'rgba(4,6,14,.6)'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(8,10,5,.62)'; ctx.fillRect(0, 0, W, H);
   const col = winner >= 0 ? COLORS[winner] : '#fff';
   ctx.save(); glow(col, 28); panel(W / 2 - 300, 150, 600, 200, 24, col, 3); noGlow(); ctx.restore();
   text(winner >= 0 ? '🏆' : '🤝', W / 2, 200, 44, '#fff', 'center');
-  text(winner >= 0 ? `PLAYER ${winner + 1} WINS!` : 'DRAW!', W / 2, 262, 50, col, 'center', '900', 'rgba(0,0,0,.6)');
+  text(winner >= 0 ? `UNIT 0${winner + 1} HOLDS THE FIELD` : 'STALEMATE', W / 2, 262, 38, col, 'center', '900', 'rgba(0,0,0,.6)');
   const n = tanks.length, sw = 120, x0 = W / 2 - (n * sw) / 2;
   tanks.forEach((t, i) => {
     const x = x0 + i * sw + sw / 2;
     ctx.fillStyle = t.color; ctx.beginPath(); ctx.arc(x - 24, 316, 11, 0, TAU); ctx.fill();
-    text(`P${i + 1}`, x - 24, 317, 11, '#0b0d14', 'center', '900');
+    text(`0${i + 1}`, x - 24, 317, 11, '#15160f', 'center', '900');
     text('★ ' + wins[i], x + 4, 317, 17, '#fcd34d', 'left', '800');
   });
   const hint = net && net.role === 'client' ? 'Waiting for the host to start the next round…     ·     ESC  leave'
@@ -1213,11 +1298,12 @@ function button(x, y, w, h, big, sub, key, color, action) {
   ctx.save(); if (hov) glow(color, 24);
   rr(x, y, w, h, 16);
   const g = ctx.createLinearGradient(0, y, 0, y + h);
-  g.addColorStop(0, hov ? 'rgba(255,255,255,.28)' : 'rgba(255,255,255,.14)'); g.addColorStop(1, hov ? 'rgba(255,255,255,.1)' : 'rgba(10,12,24,.55)');
-  ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = hov ? color : 'rgba(255,255,255,.3)'; ctx.lineWidth = 2.2; ctx.stroke(); ctx.restore();
-  text(big, x + w / 2, y + h * .42, 40, '#fff', 'center', '900', 'rgba(0,0,0,.35)');
-  text(sub, x + w / 2, y + h * .76, 13, 'rgba(255,255,255,.8)', 'center', '700');
-  if (key) text('[' + key + ']', x + 12, y + 14, 11, 'rgba(255,255,255,.6)', 'left', '800');
+  g.addColorStop(0, hov ? 'rgba(84,92,60,.96)' : 'rgba(50,56,38,.94)'); g.addColorStop(1, hov ? 'rgba(40,46,28,.96)' : 'rgba(22,25,16,.94)');
+  ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = hov ? color : 'rgba(214,204,150,.32)'; ctx.lineWidth = 2.2; ctx.stroke(); ctx.restore();
+  if (hov) hazard(x + 4, y + h - 8, w - 8, 4, .9);
+  text(big, x + w / 2, y + h * .42, 40, INK, 'center', '900', 'rgba(0,0,0,.45)');
+  text(sub, x + w / 2, y + h * .74, 13, INK_DIM, 'center', '700');
+  if (key) text('[' + key + ']', x + 12, y + 14, 11, INK_DIM, 'left', '800');
   return hov;
 }
 
@@ -1225,9 +1311,9 @@ function smallBtn(x, y, w, h, label, color, action, filled) {
   const hov = mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h;
   menuButtons.push({x, y, w, h, action});
   ctx.save(); if (hov || filled) glow(color, hov ? 22 : 12);
-  rr(x, y, w, h, 12); ctx.fillStyle = filled ? color : hov ? 'rgba(255,255,255,.22)' : 'rgba(255,255,255,.1)'; ctx.fill();
-  ctx.strokeStyle = hov ? color : 'rgba(255,255,255,.3)'; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
-  text(label, x + w / 2, y + h / 2 + 1, 16, filled ? '#0b0d14' : '#fff', 'center', '900');
+  rr(x, y, w, h, 12); ctx.fillStyle = filled ? color : hov ? 'rgba(84,92,60,.95)' : 'rgba(40,45,30,.92)'; ctx.fill();
+  ctx.strokeStyle = hov ? color : 'rgba(214,204,150,.32)'; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+  text(label, x + w / 2, y + h / 2 + 1, 16, filled ? '#15160f' : INK, 'center', '900');
   return hov;
 }
 function pickCount(n) { numPlayers = n; menuStage = 'humans'; sfx.click(); }
@@ -1242,8 +1328,8 @@ function copyInvite() {
 
 function drawLobby() {
   const host = net && net.role === 'host';
-  text(host ? 'YOUR ROOM' : 'ROOM LOBBY', W / 2, 188, 16, '#fff', 'center', '800', 'rgba(0,0,0,.5)');
-  panel(W / 2 - 190, 206, 380, 78, 16, '#facc15', 2);
+  text(host ? 'YOUR ROOM' : 'ROOM LOBBY', W / 2, 188, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
+  panel(W / 2 - 190, 206, 380, 78, 16, '#d4a417', 2);
   try { ctx.letterSpacing = '10px'; } catch (e) {}
   text(net.code, W / 2 + 5, 246, 54, '#fff', 'center', '900');
   try { ctx.letterSpacing = '0px'; } catch (e) {}
@@ -1253,37 +1339,37 @@ function drawLobby() {
     const y = 316 + i * 50, taken = net.occ[i], me = i === net.seat;
     panel(W / 2 - 260, y, 520, 42, 12, me ? COLORS[i] : 'rgba(255,255,255,.14)', me ? 2 : 1.2);
     ctx.fillStyle = COLORS[i]; ctx.beginPath(); ctx.arc(W / 2 - 232, y + 21, 14, 0, TAU); ctx.fill();
-    text('P' + (i + 1), W / 2 - 232, y + 22, 13, '#0b0d14', 'center', '900');
-    text('PLAYER ' + (i + 1), W / 2 - 205, y + 21, 15, '#fff', 'left', '800');
+    text('0' + (i + 1), W / 2 - 232, y + 22, 13, '#15160f', 'center', '900');
+    text('UNIT 0' + (i + 1), W / 2 - 205, y + 21, 15, '#fff', 'left', '800');
     const label = i === 0 ? (host ? 'HOST — you' : 'HOST') : taken ? (me ? 'YOU' : 'CONNECTED') : 'Open slot  ·  CPU if left empty';
     text(label, W / 2 + 244, y + 22, 13, taken ? (me ? COLORS[i] : '#86efac') : 'rgba(255,255,255,.4)', 'right', taken ? '800' : '600');
   }
   const by = 316 + numPlayers * 50 + 6;
   if (host) {
     const copied = T - copiedAt < 120;
-    smallBtn(W / 2 - 260, by, 250, 46, copied ? '✓ LINK COPIED' : '🔗 COPY INVITE LINK', '#60a5fa', copyInvite, false);
-    smallBtn(W / 2 + 10, by, 250, 46, net.status === 'ready' ? '▶ START GAME' : 'OPENING…', '#4ade80', startOnline, net.status === 'ready');
+    smallBtn(W / 2 - 260, by, 250, 46, copied ? '✓ LINK COPIED' : '🔗 COPY INVITE LINK', '#7f9fc0', copyInvite, false);
+    smallBtn(W / 2 + 10, by, 250, 46, net.status === 'ready' ? '▶ START GAME' : 'OPENING…', '#9cc255', startOnline, net.status === 'ready');
     text('Empty slots will be filled by CPU tanks.   Esc closes the room.', W / 2, by + 66, 12, 'rgba(255,255,255,.55)', 'center', '600', 'rgba(0,0,0,.5)');
   } else {
-    smallBtn(W / 2 - 80, by, 160, 46, 'LEAVE', '#f87171', () => leaveRoom(), false);
+    smallBtn(W / 2 - 80, by, 160, 46, 'LEAVE', '#c0583d', () => leaveRoom(), false);
   }
 }
 
 function drawOnlineMenus() {
   let any = false;
   if (menuStage === 'join') {
-    text('ENTER ROOM CODE', W / 2, 198, 16, '#fff', 'center', '800', 'rgba(0,0,0,.5)');
-    panel(W / 2 - 190, 220, 380, 84, 16, '#60a5fa', 2);
+    text('ENTER ROOM CODE', W / 2, 198, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
+    panel(W / 2 - 190, 220, 380, 84, 16, '#d4a417', 2);
     try { ctx.letterSpacing = '10px'; } catch (e) {}
     text(codeInput + (Math.floor(T / 30) % 2 ? '_' : ' '), W / 2 + 5, 262, 54, '#fff', 'center', '900');
     try { ctx.letterSpacing = '0px'; } catch (e) {}
-    if (smallBtn(W / 2 - 190, 322, 185, 46, 'JOIN', '#4ade80', () => joinRoom(codeInput), codeInput.length >= 4)) any = true;
+    if (smallBtn(W / 2 - 190, 322, 185, 46, 'JOIN', '#9cc255', () => joinRoom(codeInput), codeInput.length >= 4)) any = true;
     if (smallBtn(W / 2 + 5, 322, 185, 46, 'BACK', '#fff', () => { menuStage = 'home'; netMsg = ''; sfx.click(); }, false)) any = true;
     text('Type the code, or just open the invite link your friend sent you.', W / 2, 400, 13, 'rgba(255,255,255,.7)', 'center', '700', 'rgba(0,0,0,.5)');
   } else if (menuStage === 'connecting') {
     text(`CONNECTING TO ROOM ${net ? net.code : ''}…`, W / 2, 250, 24, '#fff', 'center', '900', 'rgba(0,0,0,.6)');
     text('(this can take a few seconds)', W / 2, 284, 13, 'rgba(255,255,255,.7)', 'center', '600');
-    if (smallBtn(W / 2 - 80, 320, 160, 46, 'CANCEL', '#f87171', () => leaveRoom(), false)) any = true;
+    if (smallBtn(W / 2 - 80, 320, 160, 46, 'CANCEL', '#c0583d', () => leaveRoom(), false)) any = true;
   } else if (menuStage === 'lobby' && net) {
     drawLobby(); any = true;
   }
@@ -1294,20 +1380,22 @@ function drawOnlineMenus() {
 
 function drawMenu() {
   menuButtons = [];
-  ctx.fillStyle = 'rgba(5,8,20,.32)'; ctx.fillRect(0, 0, W, H);
-  // title
-  try { ctx.letterSpacing = '6px'; } catch (e) {}
-  ctx.font = '900 70px "Segoe UI", system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const tg = ctx.createLinearGradient(0, 55, 0, 125); tg.addColorStop(0, '#fff3b0'); tg.addColorStop(.5, '#ffb347'); tg.addColorStop(1, '#ef4444');
-  ctx.lineWidth = 12; ctx.strokeStyle = 'rgba(30,8,8,.9)'; ctx.lineJoin = 'round'; ctx.strokeText('SCORCHED TANKS', W / 2, 92);
-  ctx.save(); glow('rgba(255,120,40,.7)', 30); ctx.fillStyle = tg; ctx.fillText('SCORCHED TANKS', W / 2, 92); ctx.restore();
+  ctx.fillStyle = 'rgba(8,10,5,.38)'; ctx.fillRect(0, 0, W, H);
+  // title: stencil lettering on a hazard-striped banner
+  hazard(W / 2 - 340, 36, 680, 7, .85); hazard(W / 2 - 340, 126, 680, 7, .85);
+  try { ctx.letterSpacing = '9px'; } catch (e) {}
+  ctx.font = `900 76px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const tg = ctx.createLinearGradient(0, 55, 0, 112); tg.addColorStop(0, '#f1e9bd'); tg.addColorStop(.55, '#bdb06c'); tg.addColorStop(1, '#7a7440');
+  ctx.lineWidth = 11; ctx.strokeStyle = 'rgba(14,16,8,.95)'; ctx.lineJoin = 'miter'; ctx.strokeText('SCORCHED TANKS', W / 2, 83);
+  ctx.save(); glow('rgba(0,0,0,.7)', 14); ctx.fillStyle = tg; ctx.fillText('SCORCHED TANKS', W / 2, 83); ctx.restore();
+  ctx.fillStyle = 'rgba(14,16,8,.9)'; for (const sx of [W / 2 - 128, W / 2 + 118, W / 2 - 330 + 150]) ctx.fillRect(sx, 52, 3, 62);   // stencil bridges
   try { ctx.letterSpacing = '0px'; } catch (e) {}
-  text('ARTILLERY  ·  DESTRUCTIBLE TERRAIN  ·  PRIZE WHEEL  ·  ONLINE MULTIPLAYER', W / 2, 142, 14, 'rgba(255,255,255,.85)', 'center', '800', 'rgba(0,0,0,.5)');
+  text('ARMORED ARTILLERY COMMAND  ·  DESTRUCTIBLE TERRAIN  ·  SUPPLY DROPS  ·  ONLINE OPS', W / 2, 153, 14, INK, 'center', '800', 'rgba(0,0,0,.6)');
 
   if (['join', 'connecting', 'lobby'].includes(menuStage)) { drawOnlineMenus(); return; }
   let any = false;
   if (menuStage === 'home') {
-    text('HOW DO YOU WANT TO PLAY?', W / 2, 198, 16, '#fff', 'center', '800', 'rgba(0,0,0,.5)');
+    text('SELECT DEPLOYMENT', W / 2, 198, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
     const opts = [
       ['LOCAL', 'Same screen · friends + CPUs', '1', () => { menuStage = 'count'; sfx.click(); }],
       ['HOST', 'Create a room for online friends', '2', () => { menuStage = 'hostcount'; sfx.click(); }],
@@ -1316,12 +1404,12 @@ function drawMenu() {
     if (netMsg) text(netMsg, W / 2, 346, 14, '#fca5a5', 'center', '800', 'rgba(0,0,0,.6)');
   } else if (menuStage === 'count' || menuStage === 'hostcount') {
     const online = menuStage === 'hostcount';
-    text(online ? 'HOW MANY TANKS IN THE ROOM?  (friends take the open seats, CPUs fill the rest)' : 'CHOOSE BATTLE SIZE', W / 2, 198, 16, '#fff', 'center', '800', 'rgba(0,0,0,.5)');
+    text(online ? 'HOW MANY TANKS IN THE ROOM?  (friends take the open seats, CPUs fill the rest)' : 'SELECT FORCE SIZE', W / 2, 198, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
     [2, 3, 4].forEach((n, i) => { if (button(W / 2 - 300 + i * 205, 218, 190, 96, n + '', n + ' TANKS', n, COLORS[i + 1], () => online ? (sfx.click(), hostRoom(n)) : pickCount(n))) any = true; });
     if (button(W / 2 - 60, 326, 120, 34, '◀', '', 'Esc', '#fff', () => { menuStage = 'home'; sfx.click(); })) any = true;
     if (netMsg) text(netMsg, W / 2, 384, 14, '#fca5a5', 'center', '800', 'rgba(0,0,0,.6)');
   } else {
-    text(`${numPlayers} TANKS — HOW MANY HUMANS?`, W / 2, 198, 16, '#fff', 'center', '800', 'rgba(0,0,0,.5)');
+    text(`${numPlayers} TANKS — HOW MANY HUMANS?`, W / 2, 198, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
     const opts = Array.from({length: numPlayers + 1}, (_, i) => i), bw = 150, gap = 14, x0 = W / 2 - (opts.length * bw + (opts.length - 1) * gap) / 2;
     opts.forEach((n, i) => {
       const sub = n === 0 ? 'WATCH CPUs' : n === numPlayers ? 'ALL HUMAN' : (numPlayers - n) + ' CPU';
@@ -1333,11 +1421,11 @@ function drawMenu() {
 
   // info panels
   panel(60, 392, 470, 200, 16);
-  text('HOW TO PLAY', 84, 416, 14, '#facc15', 'left', '900');
+  text('FIELD MANUAL', 84, 416, 14, '#d4a417', 'left', '900');
   [['←  →', 'aim the barrel'], ['↑  ↓', 'set power  (hold Shift for fine)'], ['A  D', 'drive (limited fuel)'], ['1  2  3', 'pick weapon'], ['SPACE', 'fire!'], ['T / M / P', 'aim assist / sound / pause']]
     .forEach(([k, d], i) => { const y = 444 + i * 24; rr(84, y - 10, 82, 20, 6); ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.fill(); text(k, 125, y + 1, 12, '#fff', 'center', '800'); text(d, 180, y + 1, 13, 'rgba(255,255,255,.85)', 'left', '600'); });
   panel(550, 392, 510, 200, 16);
-  text('HIT AN ENEMY → NAIL THE W-A-S-D COMBO → SPIN!', 574, 416, 14, '#facc15', 'left', '900');
+  text('HIT AN ENEMY → AUTH CODE → SUPPLY DROP', 574, 416, 14, '#d4a417', 'left', '900');
   SPECIALS.forEach((s, i) => {
     const x = 574 + (i % 2) * 245, y = 447 + Math.floor(i / 2) * 40;
     rr(x, y - 17, 235, 34, 10); ctx.fillStyle = s.color + '33'; ctx.fill(); ctx.strokeStyle = s.color + 'aa'; ctx.lineWidth = 1.5; ctx.stroke();
@@ -1357,7 +1445,7 @@ function draw() {
   if (state === 'wheel' && wheel) drawWheel();
   if (state === 'over') drawOver();
   if (paused) {
-    ctx.fillStyle = 'rgba(4,6,14,.6)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(8,10,5,.62)'; ctx.fillRect(0, 0, W, H);
     text('PAUSED', W / 2, H / 2 - 10, 60, '#fff', 'center', '900', 'rgba(0,0,0,.6)');
     text('press P to resume', W / 2, H / 2 + 40, 16, 'rgba(255,255,255,.7)', 'center', '700');
   }
