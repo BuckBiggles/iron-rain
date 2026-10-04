@@ -2,7 +2,7 @@
 
 An armored-artillery game in the spirit of Scorched Earth, with a military look, in a single HTML file. No build step, no server.
 
-**Play:** https://buckbiggles.github.io/scorched-tanks/
+**Play:** https://buckbiggles.github.io/iron-rain/
 
 - 2–4 tanks, any mix of humans and CPU opponents, on a wide battlefield
 - **Armory:** before the battle every player picks one of 8 tanks (Warhound, Bulwark, Jackal, Mammoth, Viper,
