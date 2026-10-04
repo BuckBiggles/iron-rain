@@ -28,6 +28,8 @@ If someone drops, their tank becomes a CPU.
 
 ## Controls
 
+The control panel and a controls + ammo card sit in a strip below the battlefield, so nothing covers your tank. Click any ammo icon on the card to see what it does.
+
 | Key | Action |
 |---|---|
 | ← → | Aim |

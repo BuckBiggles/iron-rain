@@ -7,11 +7,11 @@
 <style>
   html,body{margin:0;height:100%;background:#07080d;overflow:hidden;overscroll-behavior:none}
   body{display:flex;align-items:center;justify-content:center}
-  canvas{width:min(100vw,calc(100vh * 1120 / 630));aspect-ratio:1120/630;display:block;box-shadow:0 0 60px #000;user-select:none}
+  canvas{width:min(100vw,calc(100vh * 1120 / 782));aspect-ratio:1120/782;display:block;box-shadow:0 0 60px #000;user-select:none}
 </style>
 </head>
 <body>
-<canvas id="c" width="1680" height="945"></canvas>
+<canvas id="c" width="1680" height="1173"></canvas>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
@@ -20,7 +20,8 @@ const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 // code works in interface units and is drawn through a 1.5x transform. Result: a bigger map with tanks farther apart,
 // while the interface stays the same size on screen.
 const W = 1120, H = 630, TAU = Math.PI * 2;          // interface units
-const WW = cv.width, WH = cv.height, S = WW / W;     // world units (1680 x 945)
+const WW = cv.width, WH = 945, S = WW / W;          // world units (1680 x 945)
+const HUD_H = 152, UH = H + HUD_H;                  // the control strip sits BELOW the battlefield (interface y 630..782)
 const G = 0.12, POWER_SCALE = 0.13, WIND_SCALE = 0.004;
 const GROUND_MIN = 300, GROUND_MAX = WH - 240;
 const MAX_HP = 200;
@@ -1377,7 +1378,7 @@ function drawWind() {
 }
 
 function drawControlPanel() {
-  const t = tanks[turn], x = 90, w = W - 180, y0 = H - 100, h = 84, col = t.color;
+  const t = tanks[turn], x = 90, w = W - 180, y0 = H + 6, h = 84, col = t.color;
   ctx.save(); glow(col, 14); panel(x, y0, w, h, 16, col, 2); noGlow(); ctx.restore();
   // angle gauge
   const gx = 152, gy = y0 + 70, gr = 52;
@@ -1448,10 +1449,96 @@ function drawControlPanel() {
     WEAPONS.forEach((wp, i) => uiButtons.push({x: sx + i * 86, y: sy, w: sw2, h: sh, tap: () => { if (t.ammo[i] > 0) { t.weapon = i; sfx.click(); } }}));
     uiButtons.push({x: fx, y: sy, w: 80, h: 60, tap: () => { if (state === 'aim') tryFire(); }});
   }
-  // hint ribbon
-  const room = net ? `ROOM ${net.code}  ·  ` : '';
-  text(`${room}A/D move  ·  ←→ angle  ·  ↑↓ power (Shift = fine)  ·  1-3 weapon  ·  T aim assist: ${assist ? 'ON' : 'OFF'}  ·  M sound: ${muted ? 'OFF' : 'ON'}  ·  ${net ? '' : 'P pause  ·  '}Esc ${net ? 'leave' : 'menu'}`,
-       W / 2, H - 7, 11, 'rgba(255,255,255,.55)', 'center', '600', 'rgba(0,0,0,.6)');
+}
+
+// ====================================================== bottom strip: controls + ammo card, ammo info popup
+let infoButtons = [], infoPopup = null;
+const AMMO_INFO = {
+  'Missile':  'Standard high-explosive round. Unlimited ammo — your everyday workhorse.',
+  'Big Bomb': 'Heavy shell with a much bigger blast and crater. You get 3 per round.',
+  'Triple':   'Fires three smaller shells in a spread, so one of them usually finds the target. 3 per round.',
+  'NUKE':     'An enormous blast that flattens everything nearby and whites out the screen.',
+  'MIRV':     'Splits into five warheads at the top of its arc, blanketing a wide area.',
+  'AIRSTRIKE':'Where it lands, six bombs fall from the sky in a line across the target.',
+  'TELEPORT': 'Doesn\'t explode: your tank warps to wherever the shell lands. Great for escaping or flanking.',
+  'DIRT BOMB':'No damage. Dumps a mound of sand that can bury enemy tanks or build you cover.',
+  'ORBITAL':  'Marks the spot with a beacon. One second later a satellite laser strikes straight down, hitting every tank in that column and drilling a deep shaft.',
+  'BOUNCER':  'Skips along the ground three times, exploding at each bounce before the final blast.',
+  'VAMPIRE':  'All the damage it deals to enemies is added back to your own armor.',
+};
+const STATUS_INFO = st => `Hits like a missile and leaves every tank in the blast ${st.name}: their next shot fires at HALF POWER, then the effect wears off.`;
+function ammoList() { return [...WEAPONS.map(w => ({w, special: false})), ...SPECIALS.map(w => ({w, special: true}))]; }
+function wrapText(str, maxW, size, weight = '600') {
+  ctx.font = `${weight} ${size}px ${FONT}`;
+  const out = []; let line = '';
+  for (const word of str.split(' ')) { const test = line ? line + ' ' + word : word; if (ctx.measureText(test).width > maxW && line) { out.push(line); line = word; } else line = test; }
+  if (line) out.push(line);
+  return out;
+}
+
+function drawStrip() {   // background of the control strip under the battlefield
+  const g = ctx.createLinearGradient(0, H, 0, UH); g.addColorStop(0, '#20241a'); g.addColorStop(1, '#0e100b');
+  ctx.fillStyle = g; ctx.fillRect(0, H, W, HUD_H);
+  hazard(0, H, W, 4, .9);
+}
+
+function drawInfoCard() {
+  infoButtons = [];
+  const x = 20, y = H + 98, w = W - 40, h = 48;
+  panel(x, y, w, h, 10);
+  // controls (two rows of key chips)
+  const rows = [[['← →', 'Aim'], ['↑ ↓', 'Power'], ['Shift', 'Fine'], ['A D', 'Drive'], ['1 2 3', 'Weapon'], ['Space', 'Fire']],
+                [['W A S D', 'Auth code'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
+  rows.forEach((row, r) => {
+    let cx = x + 12; const cy = y + 14 + r * 20;
+    for (const [k, d] of row) {
+      ctx.font = `800 10px ${FONT}`; const kw = ctx.measureText(k).width + 10;
+      rr(cx, cy - 8, kw, 16, 4); ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.fill();
+      text(k, cx + kw / 2, cy + 1, 10, INK, 'center', '800');
+      text(d, cx + kw + 4, cy + 1, 10.5, INK_DIM, 'left', '700');
+      ctx.font = `700 10.5px ${FONT}`; cx += kw + 10 + ctx.measureText(d).width;
+    }
+  });
+  if (net) text('ROOM ' + net.code, x + 520, y + 14, 10, '#d4a417', 'right', '900');
+  // ammo chips
+  const ax = x + 540;
+  text('AMMO — CLICK FOR DETAILS', ax, y + 9, 9, '#d4a417', 'left', '900');
+  ammoList().forEach((a, k) => {
+    const bx = ax + k * 33 + (a.special ? 8 : 0), by = y + 16, s = 28, hov = inRect(mouse, {x: bx, y: by, w: s, h: s});
+    rr(bx, by, s, s, 6); ctx.fillStyle = a.w.color + (hov ? '66' : '33'); ctx.fill();
+    ctx.strokeStyle = hov ? '#fff' : a.w.color + 'aa'; ctx.lineWidth = hov ? 2 : 1.2; ctx.stroke();
+    text(a.w.icon, bx + s / 2, by + s / 2 + 1, 15, '#fff', 'center');
+    infoButtons.push({x: bx, y: by, w: s, h: s, action: () => { infoPopup = a; sfx.click(); }});
+    if (hov && !infoPopup) {   // tooltip with the name
+      const nm = a.w.short || a.w.name.toUpperCase(); ctx.font = `900 11px ${FONT}`; const tw = ctx.measureText(nm).width + 14;
+      panel(bx + s / 2 - tw / 2, by - 30, tw, 20, 6, a.w.color, 1.5); text(nm, bx + s / 2, by - 19, 11, '#fff', 'center', '900');
+    }
+  });
+}
+
+function drawInfoPopup() {
+  const a = infoPopup, w = a.w, pw = 540, ph = 300, px = (W - pw) / 2, py = 150;
+  ctx.fillStyle = 'rgba(8,10,5,.55)'; ctx.fillRect(0, 0, W, UH);
+  ctx.save(); glow(w.color, 24); panel(px, py, pw, ph, 18, w.color, 3); noGlow(); ctx.restore();
+  rr(px + 22, py + 22, 72, 72, 14); ctx.fillStyle = w.color + '44'; ctx.fill(); ctx.strokeStyle = w.color; ctx.lineWidth = 2; ctx.stroke();
+  text(w.icon, px + 58, py + 60, 40, '#fff', 'center');
+  text(w.name.toUpperCase(), px + 112, py + 44, 28, INK, 'left', '900');
+  const kind = a.special ? 'SUPPLY-DROP SPECIAL  ·  ONE USE' : w.ammo === Infinity ? 'STANDARD WEAPON  ·  UNLIMITED' : `STANDARD WEAPON  ·  ${w.ammo} PER ROUND`;
+  text(kind, px + 112, py + 74, 12, w.color, 'left', '900');
+  const desc = w.status ? STATUS_INFO(w.status) : (AMMO_INFO[w.short || w.name] || w.desc);
+  wrapText(desc, pw - 44, 15).forEach((ln, i) => text(ln, px + 22, py + 124 + i * 21, 15, INK, 'left', '600'));
+  // stats
+  const stats = [['BLAST RADIUS', w.radius ? w.radius + ' px' : '—'], ['DAMAGE', w.damage ? 'up to ' + w.damage : '—'], ['SHELLS', String(w.shots)]];
+  if (w.status) stats.push(['EFFECT', '½ power, 1 turn']);
+  const sw = (pw - 44 - (stats.length - 1) * 10) / stats.length;
+  stats.forEach(([k, v], i) => {
+    const sx = px + 22 + i * (sw + 10), sy = py + 210;
+    rr(sx, sy, sw, 44, 8); ctx.fillStyle = 'rgba(255,255,255,.07)'; ctx.fill();
+    text(k, sx + sw / 2, sy + 13, 9.5, INK_DIM, 'center', '800'); text(v, sx + sw / 2, sy + 31, 15, INK, 'center', '900');
+  });
+  text(a.special ? 'Earned by landing a hit, entering the auth code and spinning the supply-drop wheel.' : 'Select with the number keys 1–3 or click its slot in the control panel.',
+       px + pw / 2, py + 270, 11, INK_DIM, 'center', '700');
+  text('click anywhere or press Esc to close', px + pw / 2, py + ph + 18, 11, INK_DIM, 'center', '700', 'rgba(0,0,0,.6)');
 }
 
 function drawBanner() {
@@ -1832,24 +1919,31 @@ function drawMenu() {
 
 // ====================================================== main draw/loop
 function draw() {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);              // world space (1680 x 945)
-  if (mode === 'menu') { drawWorld(menuTanks); ctx.setTransform(S, 0, 0, S, 0, 0); drawMenu(); return; }
-  if (mode === 'armory') { drawWorld(menuTanks); ctx.setTransform(S, 0, 0, S, 0, 0); drawArmory(); return; }
-  drawWorld(tanks);
-  ctx.setTransform(S, 0, 0, S, 0, 0);              // interface space (1120 x 630) from here on
-  uiButtons = [];
-  drawOffscreenShells();
-  drawCards(); drawWind(); drawControlPanel(); drawBanner();
-  if (state === 'quick' && qte) drawQuick();
-  if (state === 'wheel' && wheel) drawWheel();
-  if (state === 'over') drawOver();
-  if (paused) {
-    ctx.fillStyle = 'rgba(8,10,5,.62)'; ctx.fillRect(0, 0, W, H);
-    text('PAUSED', W / 2, H / 2 - 10, 60, '#fff', 'center', '900', 'rgba(0,0,0,.6)');
-    text('press P to resume', W / 2, H / 2 + 40, 16, 'rgba(255,255,255,.7)', 'center', '700');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);              // world space (1680 x 945, top of the canvas)
+  drawWorld(mode === 'play' ? tanks : menuTanks);
+  ctx.setTransform(S, 0, 0, S, 0, 0);              // interface space (1120 x 782) from here on
+  drawStrip();
+  if (mode === 'menu' || mode === 'armory') {
+    mode === 'menu' ? drawMenu() : drawArmory();
+    text(GAME_NAME + '  ·  ARMORED ARTILLERY  ·  click an ammo type below to see what it does', W / 2, H + 50, 14, INK_DIM, 'center', '800');
+    drawInfoCard();
+  } else {
+    uiButtons = [];
+    drawOffscreenShells();
+    drawCards(); drawWind(); drawControlPanel(); drawInfoCard(); drawBanner();
+    if (state === 'quick' && qte) drawQuick();
+    if (state === 'wheel' && wheel) drawWheel();
+    if (state === 'over') drawOver();
+    if (paused) {
+      ctx.fillStyle = 'rgba(8,10,5,.62)'; ctx.fillRect(0, 0, W, H);
+      text('PAUSED', W / 2, H / 2 - 10, 60, '#fff', 'center', '900', 'rgba(0,0,0,.6)');
+      text('press P to resume', W / 2, H / 2 + 40, 16, 'rgba(255,255,255,.7)', 'center', '700');
+    }
+    drawUIParts();
+    cv.style.cursor = 'default';
   }
-  drawUIParts();
-  cv.style.cursor = 'default';
+  if (infoPopup) drawInfoPopup();
+  if (infoButtons.some(b => inRect(mouse, b)) || infoPopup) cv.style.cursor = 'pointer';
 }
 
 function drawUIParts() {   // confetti, in interface space
@@ -1882,6 +1976,7 @@ function initMenuScene() {
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   keys[k] = true; audio();
+  if (infoPopup && (k === 'escape' || k === 'enter' || k === ' ')) { infoPopup = null; e.preventDefault(); return; }   // close the ammo popup
   if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', ' ', 'backspace'].includes(k)) e.preventDefault();
   if (mode === 'menu' && menuStage === 'join') {            // typing a room code
     if (k === 'escape') { menuStage = 'home'; netMsg = ''; }
@@ -1949,11 +2044,13 @@ addEventListener('paste', e => {
 });
 addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
-function toCanvas(e) { const r = cv.getBoundingClientRect(); return {x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height}; }
+function toCanvas(e) { const r = cv.getBoundingClientRect(); return {x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * UH / r.height}; }
 const inRect = (p, b) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
 const activePtr = new Map();   // pointer currently dragging a control (power bar / angle dial)
 cv.addEventListener('pointerdown', e => {
   audio(); Object.assign(mouse, toCanvas(e));
+  if (infoPopup) { infoPopup = null; return; }                                   // any click closes the ammo popup
+  for (const b of infoButtons) if (inRect(mouse, b)) { b.action(); return; }   // ammo chips on the info card
   if (mode === 'menu' || mode === 'armory') {
     for (const b of menuButtons) if (inRect(mouse, b)) { b.action(); break; }
     return;
