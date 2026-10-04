@@ -64,6 +64,39 @@ const CHILD = {name:'Child', color:'#ffd0a0', radius:26, damage:35, shots:1, kin
 // squad colors: olive drab, desert tan, steel blue, brick red — muted but still easy to tell apart
 const COLORS = ['#86a64a', '#d4a95c', '#6f93b3', '#c0583d'];
 const ALLW = [...WEAPONS, ...SPECIALS, CHILD];   // index = id used on the wire
+// colours players can pick in the armory (no two units may share one)
+const PALETTE = ['#86a64a', '#d4a95c', '#6f93b3', '#c0583d', '#5d7a3a', '#8f8f86', '#3d4248', '#d9dccf', '#4a5f86', '#8a6f4e', '#9c6b8f', '#d6b13a'];
+// the 8 tanks in the armory: same physics footprint, different looks plus an armor-vs-mobility trade-off.
+// Coordinates are in tank space (ground contact at y = 0, gun pivot at y = -22).
+const TANKS = [
+  {name:'WARHOUND', role:'Main battle tank', hp:200, fuel:60, wheels:5, wheelR:3.7,
+   hull:[[-17,-12.5],[17,-12.5],[21,-15],[15.5,-19.5],[-15.5,-19.5],[-21,-15]],
+   turret:[[-12,-19.5],[12,-19.5],[10.5,-24.5],[3.5,-28],[-7.5,-28],[-11.5,-24]], gun:{len:29, w:4.4, sleeve:true, brake:true}, antennas:1},
+  {name:'BULWARK', role:'Heavy assault', hp:230, fuel:35, wheels:6, wheelR:3.2, skirt:true,
+   hull:[[-19,-12.5],[19,-12.5],[22.5,-15.5],[19,-21],[-19,-21],[-22.5,-15.5]],
+   turret:[[-13.5,-21],[13.5,-21],[12.5,-26.5],[7,-30.5],[-9,-30.5],[-13.5,-26.5]], gun:{len:30, w:5.4, sleeve:true, brake:true}, antennas:1},
+  {name:'JACKAL', role:'Light recon', hp:170, fuel:100, wheels:4, wheelR:4.2,
+   hull:[[-16,-12],[16,-12],[19.5,-14],[13,-18],[-13,-18],[-18.5,-14]],
+   turret:[[-8.5,-18],[9,-18],[7.5,-22.5],[-4.5,-24],[-8.5,-21.5]], gun:{len:30, w:3.2}, antennas:2},
+  {name:'MAMMOTH', role:'Twin-gun heavy', hp:225, fuel:30, wheels:6, wheelR:3.4, skirt:true,
+   hull:[[-20,-12.5],[20,-12.5],[23,-15],[18,-20.5],[-18,-20.5],[-23,-15]],
+   turret:[[-14,-20.5],[13,-20.5],[13,-26],[8,-30],[-10,-30],[-14,-26]], gun:{len:28, w:3.8, sleeve:true, twin:true}, antennas:1},
+  {name:'VIPER', role:'Tank destroyer', hp:185, fuel:75, wheels:5, wheelR:3.5,
+   hull:[[-18,-12.5],[18,-12.5],[22,-14],[12,-19],[-16,-19.5],[-20,-15]],
+   turret:[[-13,-19],[14,-19],[11,-22.5],[-11,-24]], gun:{len:32, w:3.8, brake:true}, antennas:0},
+  {name:'RHINO', role:'Assault / dozer', hp:215, fuel:50, wheels:5, wheelR:3.7, dozer:true,
+   hull:[[-17,-12.5],[17,-12.5],[19,-15],[16,-20],[-16,-20],[-20,-15.5]],
+   dome:{rx:11, ry:8.5}, gun:{len:27, w:5.6, brake:true}, antennas:1},
+  {name:'SCORPION', role:'Desert long-gun', hp:190, fuel:65, wheels:5, wheelR:3.6, skirt:true,
+   hull:[[-17,-12.5],[17,-12.5],[21,-14.5],[14,-18.5],[-14,-18.5],[-20,-14.5]],
+   dome:{rx:10, ry:7}, gun:{len:33, w:3.4, sleeve:true}, antennas:1},
+  {name:'KODIAK', role:'Reactive-armor MBT', hp:205, fuel:55, wheels:5, wheelR:3.7, era:true,
+   hull:[[-18,-12.5],[18,-12.5],[21.5,-15],[16,-20],[-16,-20],[-21,-15]],
+   turret:[[-13,-20],[11,-20],[16.5,-23.5],[8,-29],[-10,-29],[-14,-24.5]], gun:{len:30, w:4.4, sleeve:true, brake:true}, antennas:2},
+];
+const HP_RANGE = [170, 230], FUEL_RANGE = [30, 100];
+// readable text colour on top of a team colour
+function inkOn(hex) { const n = parseInt(hex.slice(1), 16); return (.299 * (n >> 16) + .587 * ((n >> 8) & 255) + .114 * (n & 255)) > 118 ? '#15160f' : '#ecebdc'; }
 const GAME_NAME = 'IRON RAIN';
 const FONT = '"Bahnschrift SemiBold Condensed","Bahnschrift","Agency FB","Arial Narrow","Segoe UI",sans-serif';
 const INK = '#e6e0c4', INK_DIM = 'rgba(230,224,196,.62)';   // khaki "stencil paint" text on dark steel
@@ -96,6 +129,7 @@ let turnFrames = 0, turnLeft = 0;
 let net = null, netMsg = '', codeInput = '', evq = [], terrainDirty = false, themeIdx = 0, shotId = 0, copiedAt = -999;
 let shake = 0, whiteFlash = 0, T = 0, aiTimer = 0, aiPlan = null;
 let banner = null, wheel = null, menuButtons = [], uiButtons = [];
+let loadout = null, armoryFocus = 0, armoryGo = 0;   // armory picks for this game session
 const keys = {}, mouse = {x: -1, y: -1};
 
 // ====================================================== audio (tiny synth)
@@ -299,8 +333,9 @@ function tiltAt(x) {
 }
 function newTank(i) {
   const slot = WW / numPlayers, x = slot * i + rnd(slot * 0.3, slot * 0.7);
-  return {i, x, y: ground[Math.floor(x)] - 4, hp: MAX_HP, shownHp: MAX_HP, status: null, angle: x < WW / 2 ? 55 : 125, power: 55, weapon: 0,
-          ammo: WEAPONS.map(w => w.ammo), fuel: 60, color: COLORS[i], vy: 0, special: null, ai: net ? !net.occ[i] : i >= numHumans,
+  const lo = loadout && loadout[i], model = lo ? lo.model : 0, M = TANKS[model];
+  return {i, x, y: ground[Math.floor(x)] - 4, model, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: x < WW / 2 ? 55 : 125, power: 55, weapon: 0,
+          ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color: lo ? lo.color : COLORS[i], vy: 0, special: null, ai: net ? !net.occ[i] : i >= numHumans,
           tilt: tiltAt(x), recoil: 0, dead: false};
 }
 function startRound() {
@@ -310,7 +345,7 @@ function startRound() {
   strikes = []; beams = []; uiParts = [];
   hit = [false, false, false, false]; shake = 0; whiteFlash = 0; paused = false; terrainDirty = false; sandActive = false;
   mode = 'play';
-  if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, v => Math.round(v * 10)), np: numPlayers, ai: tanks.map(t => t.ai)});
+  if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, v => Math.round(v * 10)), np: numPlayers, ai: tanks.map(t => t.ai), lo: tanks.map(t => [t.model, t.color])});
   beginTurn(Math.floor(Math.random() * numPlayers));
 }
 // who controls a tank on this machine? (offline hot-seat: everyone; online: only your own seat)
@@ -321,7 +356,7 @@ function nextAlive(from) {
 }
 function beginTurn(t) {
   turn = t; state = 'aim'; wind = Math.round(rnd(-10, 10));
-  tanks[t].fuel = 60; aiPlan = null; aiTimer = 80;
+  tanks[t].fuel = tanks[t].maxFuel; aiPlan = null; aiTimer = 80;
   turnFrames = net && !tanks[t].ai ? TURN_SECONDS * 60 : 0;   // online humans get a shot clock so nobody can stall the game
   emit({t: 'turn', i: t});
 }
@@ -330,7 +365,8 @@ function pivot(t) {   // world position of the turret pivot, accounting for hull
 }
 function muzzle(t) {
   const p = pivot(t), a = t.angle * Math.PI / 180;
-  return {x: p.x + Math.cos(a) * 30, y: p.y - Math.sin(a) * 30};
+  const L = TANKS[t.model || 0].gun.len + 1;
+  return {x: p.x + Math.cos(a) * L, y: p.y - Math.sin(a) * L};
 }
 
 // ====================================================== effects
@@ -513,7 +549,7 @@ function explode(x, y, w, owner) {
   }
   if (w.status) emit({t: 'stfx', k: STATUSES.indexOf(w.status), x, y, r: w.radius});
   if (w.kind === 'vamp' && dealt) {
-    const o = tanks[owner]; o.hp = Math.min(MAX_HP, o.hp + dealt);
+    const o = tanks[owner]; o.hp = Math.min(o.maxHp, o.hp + dealt);
     emit({t: 'pop', x: o.x, y: o.y - 56, s: '+' + dealt, c: '#a3e635', z: 22});
   }
 }
@@ -587,7 +623,7 @@ function tankCosmetics(t) {
   t.recoil *= .84;
   t.tilt = lerp(t.tilt, tiltAt(t.x), .2);
   if (t.dead && T % 5 === 0) addP({type: 'smoke', x: t.x + rnd(-8, 8), y: t.y - 10, vx: rnd(-.2, .2), vy: -rnd(.5, 1.2), g: -.01, life: rnd(50, 90), size: rnd(5, 9), drag: .98});
-  else if (!t.dead && t.hp < MAX_HP * .35 && T % 9 === 0) addP({type: 'smoke', x: t.x + rnd(-8, 8), y: t.y - 12, vx: rnd(-.2, .2), vy: -rnd(.4, 1), g: -.01, life: rnd(40, 70), size: rnd(3, 6), drag: .98});
+  else if (!t.dead && t.hp < t.maxHp * .35 && T % 9 === 0) addP({type: 'smoke', x: t.x + rnd(-8, 8), y: t.y - 12, vx: rnd(-.2, .2), vy: -rnd(.4, 1), g: -.01, life: rnd(40, 70), size: rnd(3, 6), drag: .98});
   if (t.status && !t.dead) {   // status effect particles
     const id = t.status.id, px = t.x + rnd(-16, 16), py = t.y - rnd(6, 24);
     if (id === 'burning') {
@@ -627,7 +663,8 @@ function update() {
 
 function updateGame() {
   updateFx();
-  if (mode === 'menu') {
+  if (mode === 'menu' || mode === 'armory') {
+    if (mode === 'armory') armoryTick();
     for (const t of menuTanks) { t.angle = 90 + Math.sin(T * .02 + t.i * 1.7) * 55; t.recoil *= .85; }
     return;
   }
@@ -784,7 +821,7 @@ function inviteLink() { return location.href.split(/[?#]/)[0] + '?room=' + net.c
 function bcast(m) { if (net && net.role === 'host') for (const c of net.conns) if (c.conn.open) { try { c.conn.send(m); } catch (e) {} } }
 
 function leaveRoom(msg) {
-  const n = net; net = null; netMsg = msg || '';
+  const n = net; net = null; netMsg = msg || ''; loadout = null;
   if (n) { try { (n.conns || []).forEach(c => c.conn.close()); if (n.conn) n.conn.close(); if (n.peer) n.peer.destroy(); } catch (e) {} }
   if (mode === 'play') { mode = 'menu'; }
   shots = []; tanks = []; wheel = null; banner = null; evq = [];
@@ -811,7 +848,7 @@ function onHostConn(conn) {
   conn.on('open', () => {
     if (!net || net.role !== 'host') { conn.close(); return; }
     const seat = net.occ.findIndex((o, i) => i < numPlayers && !o);
-    if (mode === 'play' || seat < 0) {
+    if (mode !== 'menu' || seat < 0) {
       conn.send({t: 'full', why: mode === 'play' ? 'That game has already started.' : 'That room is full.'});
       setTimeout(() => conn.close(), 400); return;
     }
@@ -833,11 +870,13 @@ function hostDrop(conn) {
       t.ai = true; emit({t: 'pop', x: t.x, y: t.y - 72, s: 'DISCONNECTED → CPU', c: '#fff', z: 14});
       if (state === 'aim' && turn === seat) { aiPlan = null; aiTimer = 60; turnFrames = 0; }
     }
-  } else bcast({t: 'lobby', np: numPlayers, occ: net.occ});
+  } else if (mode === 'armory') { loadout[seat] = null; loadout[seat] = cpuPick(seat); bcastArmory(); }   // a dropped player's seat goes to a CPU
+  else bcast({t: 'lobby', np: numPlayers, occ: net.occ});
 }
 function hostData(conn, d) {
   const c = net && net.conns.find(c => c.conn === conn);
   if (c) c.seen = performance.now();
+  if (c && d && d.t === 'pick' && mode === 'armory') { armoryChange(c.seat, d); bcastArmory(); return; }
   if (!c || mode !== 'play' || !d) return;
   const t = tanks[c.seat];
   if (d.t === 'qk' && t && !t.ai && state === 'quick' && turn === c.seat && typeof d.k === 'string') qteKey(d.k.slice(0, 1).toLowerCase());
@@ -904,6 +943,7 @@ function clientData(m) {
     case 'full': fail2(m.why); break;
     case 'lobby': net.occ = m.occ; numPlayers = m.np; break;
     case 'round': startClientRound(m); break;
+    case 'arm': loadout = m.p; armoryGo = m.go || 0; if (mode !== 'armory') { mode = 'armory'; menuButtons = []; } break;
     case 's': applySnap(m); break;
   }
 }
@@ -911,8 +951,11 @@ function fail2(msg) { leaveRoom(msg || 'Could not join.'); menuStage = 'join'; }
 
 function startClientRound(m) {
   numPlayers = m.np; makeScene(m.th, m.g);
-  tanks = m.ai.map((ai, i) => ({i, x: 0, y: 0, tx: 0, ty: 0, ta: 55, tp: 55, init: false, hp: MAX_HP, shownHp: MAX_HP, status: null, angle: 55, power: 55,
-    weapon: 0, ammo: [Infinity, 3, 3], fuel: 60, color: COLORS[i], vy: 0, special: null, ai, tilt: 0, recoil: 0, dead: false}));
+  tanks = m.ai.map((ai, i) => {
+    const [model, color] = (m.lo && m.lo[i]) || [0, COLORS[i]], M = TANKS[model];
+    return {i, x: 0, y: 0, tx: 0, ty: 0, ta: 55, tp: 55, init: false, model, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 55, power: 55,
+            weapon: 0, ammo: [Infinity, 3, 3], fuel: M.fuel, maxFuel: M.fuel, color, vy: 0, special: null, ai, tilt: 0, recoil: 0, dead: false};
+  });
   shots = []; parts = []; rings = []; flashes = []; popups = []; wheel = null; winner = -1; banner = null; strikes = []; beams = []; uiParts = [];
   shake = 0; whiteFlash = 0; state = 'aim'; turn = 0; mode = 'play'; net.sent = false;
 }
@@ -1030,67 +1073,88 @@ function poly(pts) { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(
 function star(cx, cy, r) { ctx.beginPath(); for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, q = i % 2 ? r * .42 : r; ctx.lineTo(cx + Math.cos(a) * q, cy + Math.sin(a) * q); } ctx.closePath(); }
 const CAMO = [[-11, -14, 8, 3.2, .25], [4, -16, 9, 3, -.3], [13, -13.5, 5.5, 3.4, .5], [-3, -12.5, 6.5, 2.6, 0]];   // hull camo blotches: x, y, rx, ry, rot
 
-function drawTank(t, active) {
-  const dead = t.hp <= 0, col = dead ? '#34332e' : t.color;
+function drawTank(t, active, preview) {
+  const M = TANKS[t.model || 0], dead = t.hp <= 0, col = dead ? '#34332e' : t.color;
   const dark = shade(col, -.38), light = shade(col, .22);
+  const hullTop = Math.min(...M.hull.map(p => p[1]));
   ctx.save(); ctx.translate(t.x, t.y + 4);
   ctx.fillStyle = 'rgba(0,0,0,.32)'; ctx.beginPath(); ctx.ellipse(0, 1, 24, 3.6, 0, 0, TAU); ctx.fill();
   ctx.rotate(t.tilt);
   // tracks + road wheels
   poly([[-22, -3], [-19, -10.5], [19, -10.5], [22, -3], [18, 0.5], [-18, 0.5]]); ctx.fillStyle = '#171813'; ctx.fill();
   ctx.strokeStyle = '#3d3f33'; ctx.lineWidth = 1; ctx.stroke();
-  for (let x = -14; x <= 14; x += 7) {
-    ctx.fillStyle = '#34362c'; ctx.beginPath(); ctx.arc(x, -4.8, 3.7, 0, TAU); ctx.fill();
+  for (let k = 0; k < M.wheels; k++) {
+    const x = -14 + 28 * k / (M.wheels - 1);
+    ctx.fillStyle = '#34362c'; ctx.beginPath(); ctx.arc(x, -4.8, M.wheelR, 0, TAU); ctx.fill();
     ctx.strokeStyle = '#0c0d0a'; ctx.lineWidth = 1; ctx.stroke();
     ctx.fillStyle = '#6a6e5a'; ctx.beginPath(); ctx.arc(x, -4.8, 1.3, 0, TAU); ctx.fill();
   }
-  ctx.fillStyle = dark; poly([[-21, -9.5], [21, -9.5], [18.5, -12.5], [-18.5, -12.5]]); ctx.fill();   // side skirt
-  // hull: sloped glacis, angular
-  const hull = [[-17, -12.5], [17, -12.5], [21, -15], [15.5, -19.5], [-15.5, -19.5], [-21, -15]];
-  const hg = ctx.createLinearGradient(0, -19.5, 0, -12.5); hg.addColorStop(0, light); hg.addColorStop(1, dark);
-  poly(hull); ctx.fillStyle = hg; ctx.fill();
-  ctx.save(); poly(hull); ctx.clip();
+  ctx.fillStyle = dark;
+  if (M.skirt) { poly([[-22.5, -6], [22.5, -6], [21, -12.5], [-21, -12.5]]); ctx.fill(); ctx.fillStyle = 'rgba(0,0,0,.3)'; for (let x = -18; x <= 18; x += 9) ctx.fillRect(x, -11.5, 1, 5); }
+  else { poly([[-21, -9.5], [21, -9.5], [18.5, -12.5], [-18.5, -12.5]]); ctx.fill(); }   // side skirt
+  if (M.dozer) {   // dozer blade on the nose
+    poly([[19, -1.5], [25.5, 0], [25.5, -13], [20.5, -14.5]]); ctx.fillStyle = shade(col, -.5); ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.stroke();
+    ctx.strokeStyle = '#2b2d25'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(14, -9); ctx.lineTo(21, -6); ctx.stroke();
+  }
+  // hull
+  const hg = ctx.createLinearGradient(0, hullTop, 0, -12.5); hg.addColorStop(0, light); hg.addColorStop(1, dark);
+  poly(M.hull); ctx.fillStyle = hg; ctx.fill();
+  ctx.save(); poly(M.hull); ctx.clip();
   ctx.fillStyle = dead ? '#23221e' : dark; for (const [cx, cy, rx, ry, rot] of CAMO) { ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, rot, 0, TAU); ctx.fill(); }
   ctx.fillStyle = dead ? '#2a2924' : 'rgba(70,58,34,.55)'; for (const [cx, cy, rx, ry, rot] of CAMO) { ctx.beginPath(); ctx.ellipse(cx + 7, cy + 2.5, rx * .55, ry * .7, -rot, 0, TAU); ctx.fill(); }
   ctx.restore();
-  poly(hull); ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1; ctx.stroke();
-  ctx.fillStyle = 'rgba(0,0,0,.45)'; for (let i = 0; i < 4; i++) ctx.fillRect(-14 + i * 2.4, -17.6, 1.4, 3);   // engine louvers
+  poly(M.hull); ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1; ctx.stroke();
+  if (M.era) { ctx.fillStyle = shade(col, -.15); ctx.strokeStyle = 'rgba(0,0,0,.45)'; for (let x = -14; x <= 10; x += 6) { ctx.fillRect(x, hullTop + 1.5, 4.6, 3.4); ctx.strokeRect(x, hullTop + 1.5, 4.6, 3.4); } }   // reactive armor bricks
+  else { ctx.fillStyle = 'rgba(0,0,0,.45)'; for (let i = 0; i < 4; i++) ctx.fillRect(-14 + i * 2.4, hullTop + 2, 1.4, 3); }   // engine louvers
   if (!dead) {
     ctx.fillStyle = INK; ctx.globalAlpha = .85; star(13, -15.2, 2.6); ctx.fill(); ctx.globalAlpha = 1;   // allied star insignia
     ctx.fillStyle = '#f5e9a8'; ctx.fillRect(18.6, -15.4, 2, 1.6);                                          // headlamp
   }
-  // main gun: thermal sleeve + bore + muzzle brake (pivot is (0, -22) in tank space)
+  // main gun (pivot is (0, -22) in tank space)
   ctx.save();
   ctx.translate(0, -22); ctx.rotate(-t.tilt);
   ctx.rotate(dead ? Math.PI * .2 : -t.angle * Math.PI / 180);
-  const r = t.recoil;
-  ctx.fillStyle = '#2b2d25'; ctx.fillRect(-r, -2.2, 29, 4.4);
-  const sg = ctx.createLinearGradient(0, -3.6, 0, 3.6); sg.addColorStop(0, shade(col, .1)); sg.addColorStop(.5, dark); sg.addColorStop(1, shade(col, -.55));
-  ctx.fillStyle = sg; ctx.fillRect(5 - r, -3.6, 15, 7.2);
-  ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fillRect(5 - r, -.3, 15, .7);
-  ctx.fillStyle = '#1d1e19'; ctx.fillRect(24 - r, -3.6, 5.5, 7.2);                      // muzzle brake
-  ctx.fillStyle = '#4b4e40'; ctx.fillRect(25.5 - r, -3.6, 1, 7.2); ctx.fillRect(27.5 - r, -3.6, 1, 7.2);
-  ctx.restore();
-  // turret: faceted
-  const tur = [[-12, -19.5], [12, -19.5], [10.5, -24.5], [3.5, -28], [-7.5, -28], [-11.5, -24]];
-  const tg = ctx.createLinearGradient(0, -28, 0, -19.5); tg.addColorStop(0, light); tg.addColorStop(1, dark);
-  poly(tur); ctx.fillStyle = tg; ctx.fill();
-  ctx.save(); poly(tur); ctx.clip(); ctx.fillStyle = dead ? '#23221e' : dark; ctx.beginPath(); ctx.ellipse(-6, -24, 6, 3, .3, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.ellipse(7, -21.5, 5, 2.4, -.2, 0, TAU); ctx.fill(); ctx.restore();
-  poly(tur); ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1; ctx.stroke();
-  ctx.fillStyle = '#1d1e19'; ctx.beginPath(); ctx.ellipse(-3.5, -28.4, 3.4, 1.4, 0, 0, TAU); ctx.fill();   // commander hatch
-  ctx.fillStyle = '#2b2d25'; ctx.fillRect(2.5, -31.5, 4.5, 3.4);                                              // sight block
-  if (!dead) {
-    ctx.fillStyle = '#9ec6a0'; ctx.globalAlpha = .75; ctx.fillRect(5.2, -30.4, 1.6, 1.2); ctx.globalAlpha = 1;
-    ctx.strokeStyle = '#1b1c18'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(-9, -27.5); ctx.lineTo(-13, -43); ctx.stroke();   // whip antenna
-    ctx.fillStyle = INK; ctx.globalAlpha = .8; star(-1.5, -22.5, 2.3); ctx.fill(); ctx.globalAlpha = 1;
+  const r = t.recoil, gn = M.gun, L = gn.len;
+  for (const off of gn.twin ? [-2.6, 2.6] : [0]) {
+    ctx.fillStyle = '#2b2d25'; ctx.fillRect(-r, off - gn.w / 2, L, gn.w);
+    if (gn.sleeve) {
+      const sg = ctx.createLinearGradient(0, off - gn.w * .82, 0, off + gn.w * .82); sg.addColorStop(0, shade(col, .1)); sg.addColorStop(.5, dark); sg.addColorStop(1, shade(col, -.55));
+      ctx.fillStyle = sg; ctx.fillRect(5 - r, off - gn.w * .82, L * .52, gn.w * 1.64);
+      ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.fillRect(5 - r, off - .3, L * .52, .7);
+    }
+    if (gn.brake) { ctx.fillStyle = '#1d1e19'; ctx.fillRect(L - 5 - r, off - gn.w * .82, 5.5, gn.w * 1.64); ctx.fillStyle = '#4b4e40'; ctx.fillRect(L - 3.5 - r, off - gn.w * .82, 1, gn.w * 1.64); ctx.fillRect(L - 1.5 - r, off - gn.w * .82, 1, gn.w * 1.64); }
   }
   ctx.restore();
-  if (dead) return;
+  // turret: faceted plates, or a cast dome
+  let topY;
+  if (M.dome) {
+    topY = hullTop - M.dome.ry;
+    const dg = ctx.createLinearGradient(0, topY, 0, hullTop); dg.addColorStop(0, light); dg.addColorStop(1, dark);
+    ctx.beginPath(); ctx.ellipse(0, hullTop + .5, M.dome.rx, M.dome.ry, 0, Math.PI, 0); ctx.closePath(); ctx.fillStyle = dg; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1; ctx.stroke();
+  } else {
+    topY = Math.min(...M.turret.map(p => p[1]));
+    const tg = ctx.createLinearGradient(0, topY, 0, hullTop); tg.addColorStop(0, light); tg.addColorStop(1, dark);
+    poly(M.turret); ctx.fillStyle = tg; ctx.fill();
+    ctx.save(); poly(M.turret); ctx.clip(); ctx.fillStyle = dead ? '#23221e' : dark; ctx.beginPath(); ctx.ellipse(-6, topY + 4, 6, 3, .3, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.ellipse(7, topY + 6.5, 5, 2.4, -.2, 0, TAU); ctx.fill(); ctx.restore();
+    poly(M.turret); ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1; ctx.stroke();
+  }
+  ctx.fillStyle = '#1d1e19'; ctx.beginPath(); ctx.ellipse(-3.5, topY - .4, 3.4, 1.4, 0, 0, TAU); ctx.fill();   // commander hatch
+  ctx.fillStyle = '#2b2d25'; ctx.fillRect(2.5, topY - 3.5, 4.5, 3.4);                                              // sight block
+  if (!dead) {
+    ctx.fillStyle = '#9ec6a0'; ctx.globalAlpha = .75; ctx.fillRect(5.2, topY - 2.4, 1.6, 1.2); ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#1b1c18'; ctx.lineWidth = 1;
+    if (M.antennas > 0) { ctx.beginPath(); ctx.moveTo(-9, topY + .5); ctx.lineTo(-13, topY - 15); ctx.stroke(); }   // whip antennas
+    if (M.antennas > 1) { ctx.beginPath(); ctx.moveTo(-6, topY + .5); ctx.lineTo(-7, topY - 11); ctx.stroke(); }
+    ctx.fillStyle = INK; ctx.globalAlpha = .8; star(-1.5, (topY + hullTop) / 2 + .5, 2.3); ctx.fill(); ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+  if (dead || preview) return;
   // unit tag + armor bar above the tank
   text('0' + (t.i + 1), t.x, t.y - 55, 14, INK, 'center', '800', 'rgba(0,0,0,.75)');
   if (t.status) text(t.status.icon, t.x + 21, t.y - 55, 14, '#fff', 'center');
   rr(t.x - 19, t.y - 49, 38, 6, 2); ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fill();
-  const hp = clamp(t.shownHp / MAX_HP, 0, 1);
+  const hp = clamp(t.shownHp / t.maxHp, 0, 1);
   if (hp > .01) { rr(t.x - 18, t.y - 48, 36 * hp, 4, 1); ctx.fillStyle = hp > .5 ? '#9cc255' : hp > .25 ? '#e0b23c' : '#d6492f'; ctx.fill(); }
   if (active) {
     const b = Math.sin(T * .12) * 3;
@@ -1273,12 +1337,12 @@ function drawCards() {
     // unit plate: stencilled number on a team-coloured steel plate
     const pg = ctx.createLinearGradient(0, y + 14, 0, y + 48); pg.addColorStop(0, shade(t.color, .15)); pg.addColorStop(1, shade(t.color, -.35));
     rr(x + 10, y + 14, 34, 34, 8); ctx.fillStyle = pg; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 2; ctx.stroke();
-    text(t.hp <= 0 ? '✕' : '0' + (i + 1), x + 27, y + 32, t.hp <= 0 ? 22 : 20, '#15160f', 'center', '900');
-    text('UNIT 0' + (i + 1), x + 52, y + 17, 13, INK, 'left', '800');
+    text(t.hp <= 0 ? '✕' : '0' + (i + 1), x + 27, y + 32, t.hp <= 0 ? 22 : 20, inkOn(t.color), 'center', '900');
+    text('UNIT 0' + (i + 1) + ' · ' + TANKS[t.model || 0].name, x + 52, y + 17, 12, INK, 'left', '800');
     const you = net && i === net.seat;
     text(t.ai ? 'CPU' : you ? 'YOU' : 'OPERATOR', x + cw - 12, y + 17, 11, you ? t.color : INK_DIM, 'right', you ? '900' : '700');
     // armor: segmented bar
-    const bx = x + 52, bw = cw - 104, hp = clamp(t.shownHp / MAX_HP, 0, 1), segs = 20, sw = (bw - (segs - 1) * 1.5) / segs, lit = Math.ceil(hp * segs - .001);
+    const bx = x + 52, bw = cw - 104, hp = clamp(t.shownHp / t.maxHp, 0, 1), segs = 20, sw = (bw - (segs - 1) * 1.5) / segs, lit = Math.ceil(hp * segs - .001);
     const base = hp > .5 ? '#9cc255' : hp > .25 ? '#e0b23c' : '#d6492f';
     for (let k = 0; k < segs; k++) { ctx.fillStyle = k < lit ? base : 'rgba(255,255,255,.08)'; ctx.fillRect(bx + k * (sw + 1.5), y + 29, sw, 12); }
     text(String(Math.max(0, Math.round(t.hp))), x + cw - 46, y + 33, 13, INK, 'left', '800');
@@ -1343,7 +1407,7 @@ function drawControlPanel() {
   }
   text('FUEL', px, y0 + 62, 10, INK_DIM, 'left', '800');
   rr(px + 40, y0 + 58, pw - 40, 8, 4); ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fill();
-  if (t.fuel > 0) { rr(px + 40, y0 + 58, (pw - 40) * t.fuel / 60, 8, 4); ctx.fillStyle = '#7fb3a0'; ctx.fill(); }
+  if (t.fuel > 0) { rr(px + 40, y0 + 58, (pw - 40) * t.fuel / t.maxFuel, 8, 4); ctx.fillStyle = '#7fb3a0'; ctx.fill(); }
   // weapons
   const sx = 572, sy = y0 + 12, sw2 = 80, sh = 60;
   WEAPONS.forEach((wp, i) => {
@@ -1371,7 +1435,7 @@ function drawControlPanel() {
   if (ready) glow(col, 14);
   rr(-40, -30, 80, 60, 12); ctx.fillStyle = ready ? col : 'rgba(255,255,255,.08)'; ctx.fill(); noGlow();
   if (ready) { hazard(-40, -30, 80, 8, .9); hazard(-40, 22, 80, 8, .9); }   // warning stripes on an armed trigger
-  text(t.ai ? 'CPU' : mineT ? 'FIRE' : 'WAIT', 0, -6, 17, ready ? '#0b0d14' : 'rgba(255,255,255,.45)', 'center', '900');
+  text(t.ai ? 'CPU' : mineT ? 'FIRE' : 'WAIT', 0, -6, 17, ready ? inkOn(col) : 'rgba(255,255,255,.45)', 'center', '900');
   text(t.ai ? (state === 'aim' ? 'thinking…' : '') : mineT ? 'SPACE' : 'their turn', 0, 14, 10, ready ? 'rgba(0,0,0,.6)' : 'rgba(255,255,255,.4)', 'center', '800');
   ctx.restore();
   // mouse shortcuts (only for the tank this machine controls, while aiming)
@@ -1480,7 +1544,7 @@ function drawWheel() {
 
 function drawOver() {
   ctx.fillStyle = 'rgba(8,10,5,.62)'; ctx.fillRect(0, 0, W, H);
-  const col = winner >= 0 ? COLORS[winner] : '#fff';
+  const col = winner >= 0 ? tanks[winner].color : '#fff';
   ctx.save(); glow(col, 28); panel(W / 2 - 300, 150, 600, 200, 24, col, 3); noGlow(); ctx.restore();
   text(winner >= 0 ? '🏆' : '🤝', W / 2, 200, 44, '#fff', 'center');
   text(winner >= 0 ? `UNIT 0${winner + 1} HOLDS THE FIELD` : 'STALEMATE', W / 2, 262, 38, col, 'center', '900', 'rgba(0,0,0,.6)');
@@ -1488,7 +1552,7 @@ function drawOver() {
   tanks.forEach((t, i) => {
     const x = x0 + i * sw + sw / 2;
     ctx.fillStyle = t.color; ctx.beginPath(); ctx.arc(x - 24, 316, 11, 0, TAU); ctx.fill();
-    text(`0${i + 1}`, x - 24, 317, 11, '#15160f', 'center', '900');
+    text(`0${i + 1}`, x - 24, 317, 11, inkOn(t.color), 'center', '900');
     text('★ ' + wins[i], x + 4, 317, 17, '#fcd34d', 'left', '800');
   });
   const hint = net && net.role === 'client' ? 'Waiting for the host to start the next round…     ·     ESC  leave'
@@ -1522,8 +1586,120 @@ function smallBtn(x, y, w, h, label, color, action, filled) {
   return hov;
 }
 function pickCount(n) { numPlayers = n; menuStage = 'humans'; sfx.click(); }
-function pickHumans(n) { numHumans = n; wins = [0, 0, 0, 0]; sfx.click(); startRound(); }
-function startOnline() { if (!net || net.role !== 'host' || net.status !== 'ready') return; wins = [0, 0, 0, 0]; sfx.click(); startRound(); }
+function pickHumans(n) { numHumans = n; wins = [0, 0, 0, 0]; sfx.click(); enterArmory(); }
+function startOnline() { if (!net || net.role !== 'host' || net.status !== 'ready') return; wins = [0, 0, 0, 0]; sfx.click(); enterArmory(); }
+
+// ====================================================== armory: every player picks a tank + colour, then READY
+// loadout[i] = {model, color, ready, cpu}. Local games and the online host own it; clients send 'pick' requests.
+const seatIsCPU = i => net ? !net.occ[i] : i >= numHumans;
+const takenColors = except => loadout.filter((p, i) => p && i !== except).map(p => p.color);
+const canEditSeat = i => loadout && loadout[i] && !loadout[i].cpu && (!net || i === net.seat);
+function cpuPick(i) { return {model: Math.floor(Math.random() * TANKS.length), color: pick(PALETTE.filter(c => !takenColors(i).includes(c))), ready: true, cpu: true}; }
+function enterArmory() {
+  loadout = Array(numPlayers).fill(null);
+  for (let i = 0; i < numPlayers; i++) if (!seatIsCPU(i)) {   // humans first, each on a different default tank + colour
+    const free = PALETTE.filter(c => !takenColors(i).includes(c));
+    loadout[i] = {model: i % TANKS.length, color: free.includes(COLORS[i]) ? COLORS[i] : free[0], ready: false, cpu: false};
+  }
+  for (let i = 0; i < numPlayers; i++) if (!loadout[i]) loadout[i] = cpuPick(i);   // CPUs get a random tank + unused colour
+  armoryFocus = Math.max(0, loadout.findIndex(p => !p.cpu)); armoryGo = 0;
+  mode = 'armory'; menuButtons = [];
+  if (net && net.role === 'host') bcastArmory();
+}
+function armoryChange(i, ch) {   // validated change to one seat's pick (local input, host input, or a client's request)
+  const p = loadout && loadout[i]; if (!p || p.cpu) return;
+  if (Number.isInteger(ch.model)) p.model = ((ch.model % TANKS.length) + TANKS.length) % TANKS.length;
+  if (typeof ch.color === 'string' && PALETTE.includes(ch.color) && !takenColors(i).includes(ch.color)) p.color = ch.color;
+  if (typeof ch.ready === 'boolean') p.ready = ch.ready;
+}
+function requestPick(i, ch) {    // from this machine's input
+  if (!canEditSeat(i)) return;
+  if (net && net.role === 'client') { armoryChange(i, ch); if (net.conn.open) net.conn.send(Object.assign({t: 'pick'}, ch)); }
+  else { armoryChange(i, ch); if (net) bcastArmory(); }
+  sfx.click();
+}
+function cycleColor(i, dir) {
+  const p = loadout[i], taken = takenColors(i);
+  let k = PALETTE.indexOf(p.color);
+  for (let n = 0; n < PALETTE.length; n++) { k = (k + dir + PALETTE.length) % PALETTE.length; if (!taken.includes(PALETTE[k])) return PALETTE[k]; }
+  return p.color;
+}
+function bcastArmory() { bcast({t: 'arm', p: loadout, go: armoryGo}); }
+function armoryTick() {          // host / local: launch once every unit is ready
+  if (net && net.role === 'client') return;
+  if (loadout.every(p => p.ready)) { if (++armoryGo === 1) sfx.prize(); if (armoryGo > 50) { armoryGo = 0; startRound(); return; } }
+  else armoryGo = 0;
+  if (net && T % 20 === 0) bcastArmory();
+}
+
+function drawArmory() {
+  menuButtons = [];
+  ctx.fillStyle = 'rgba(8,10,5,.62)'; ctx.fillRect(0, 0, W, H);
+  hazard(W / 2 - 300, 18, 600, 6, .85);
+  text('ARMORY — SELECT YOUR TANK', W / 2, 46, 30, INK, 'center', '900', 'rgba(0,0,0,.6)');
+  text('Pick a tank and a colour, then hit READY. CPU units are assigned at random.', W / 2, 72, 13, INK_DIM, 'center', '700');
+  const n = loadout.length, gap = 14, pw = Math.min(255, (W - 60 - gap * (n - 1)) / n), x0 = (W - (pw * n + gap * (n - 1))) / 2, py = 92, ph = 468;
+  let any = false;
+  loadout.forEach((p, i) => {
+    const px = x0 + i * (pw + gap), M = TANKS[p.model], mine = canEditSeat(i), focus = !net && i === armoryFocus && !p.cpu;
+    ctx.save(); if (focus || (net && i === net.seat)) glow(p.color, 18);
+    panel(px, py, pw, ph, 16, p.ready ? '#9cc255' : (focus || (net && i === net.seat)) ? p.color : 'rgba(214,204,150,.3)', p.ready || focus ? 2.4 : 1.4);
+    noGlow(); ctx.restore();
+    if (!net && !p.cpu) menuButtons.push({x: px, y: py, w: pw, h: 40, action: () => { armoryFocus = i; }});   // click a header to focus (hot-seat)
+    // header
+    rr(px + 12, py + 12, 30, 30, 7); ctx.fillStyle = p.color; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 2; ctx.stroke();
+    text('0' + (i + 1), px + 27, py + 28, 16, inkOn(p.color), 'center', '900');
+    text('UNIT 0' + (i + 1), px + 50, py + 27, 15, INK, 'left', '900');
+    const who = p.cpu ? 'CPU' : net ? (i === net.seat ? 'YOU' : 'OPERATOR') : 'OPERATOR';
+    text(who, px + pw - 12, py + 27, 11, who === 'YOU' ? p.color : INK_DIM, 'right', '800');
+    // tank preview
+    rr(px + 12, py + 50, pw - 24, 130, 10); ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fill();
+    ctx.fillStyle = 'rgba(120,110,80,.25)'; ctx.fillRect(px + 14, py + 158, pw - 28, 3);
+    ctx.save(); ctx.translate(px + pw / 2, py + 158); ctx.scale(2.5, 2.5);
+    drawTank({model: p.model, color: p.color, x: 0, y: -4, tilt: 0, angle: 30, recoil: 0, hp: 1, i}, false, true);
+    ctx.restore();
+    if (mine) {
+      if (smallBtn(px + 16, py + 92, 30, 46, '◀', p.color, () => requestPick(i, {model: p.model - 1}), false)) any = true;
+      if (smallBtn(px + pw - 46, py + 92, 30, 46, '▶', p.color, () => requestPick(i, {model: p.model + 1}), false)) any = true;
+    }
+    text(`${p.model + 1}/${TANKS.length}`, px + pw - 20, py + 64, 10, INK_DIM, 'right', '700');
+    // name, role, stats
+    text(M.name, px + pw / 2, py + 202, 21, INK, 'center', '900');
+    text(M.role, px + pw / 2, py + 222, 11, INK_DIM, 'center', '700');
+    const bar = (label, v, lo, hi, y, valTxt) => {
+      text(label, px + 16, y, 10, INK_DIM, 'left', '800');
+      const bx = px + 86, bw = pw - 86 - 44, f = .15 + .85 * (v - lo) / (hi - lo);
+      rr(bx, y - 5, bw, 10, 3); ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fill();
+      rr(bx, y - 5, bw * f, 10, 3); ctx.fillStyle = '#9cc255'; ctx.fill();
+      text(valTxt, px + pw - 14, y, 11, INK, 'right', '800');
+    };
+    bar('ARMOR', M.hp, HP_RANGE[0], HP_RANGE[1], py + 248, String(M.hp));
+    bar('MOBILITY', M.fuel, FUEL_RANGE[0], FUEL_RANGE[1], py + 268, String(M.fuel));
+    // colours
+    text('COLOUR', px + 16, py + 296, 10, INK_DIM, 'left', '800');
+    const taken = takenColors(i), sz = 24, sg = Math.min(8, (pw - 32 - 6 * sz) / 5), sx0 = px + (pw - (6 * sz + 5 * sg)) / 2;
+    PALETTE.forEach((c, k) => {
+      const cx = sx0 + (k % 6) * (sz + sg), cy = py + 308 + Math.floor(k / 6) * (sz + 8), sel = c === p.color, gone = taken.includes(c);
+      rr(cx, cy, sz, sz, 6); ctx.fillStyle = c; ctx.globalAlpha = gone ? .25 : 1; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = sel ? '#fff' : 'rgba(0,0,0,.5)'; ctx.lineWidth = sel ? 2.5 : 1; ctx.stroke();
+      if (gone) { ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(cx + 5, cy + 5); ctx.lineTo(cx + sz - 5, cy + sz - 5); ctx.stroke(); }
+      if (mine && !gone) menuButtons.push({x: cx, y: cy, w: sz, h: sz, action: () => requestPick(i, {color: c})});
+    });
+    // ready
+    const ry = py + 384;
+    if (p.cpu) { rr(px + 14, ry, pw - 28, 46, 10); ctx.fillStyle = 'rgba(156,194,85,.25)'; ctx.fill(); text('CPU — READY', px + pw / 2, ry + 24, 16, '#9cc255', 'center', '900'); }
+    else if (mine) { if (smallBtn(px + 14, ry, pw - 28, 46, p.ready ? '✓ READY' : 'READY', p.ready ? '#9cc255' : p.color, () => requestPick(i, {ready: !p.ready}), p.ready)) any = true; }
+    else { rr(px + 14, ry, pw - 28, 46, 10); ctx.fillStyle = p.ready ? 'rgba(156,194,85,.25)' : 'rgba(255,255,255,.06)'; ctx.fill();
+           text(p.ready ? '✓ READY' : 'CHOOSING…', px + pw / 2, ry + 24, 16, p.ready ? '#9cc255' : INK_DIM, 'center', '900'); }
+    if (focus && !p.ready) text('◆ YOUR KEYS CONTROL THIS UNIT', px + pw / 2, ry + 62, 9.5, p.color, 'center', '800');
+  });
+  const all = loadout.every(p => p.ready);
+  if (all) { ctx.save(); glow('#9cc255', 20); panel(W / 2 - 200, 566, 400, 40, 12, '#9cc255', 2); noGlow(); ctx.restore(); text('ALL UNITS READY — DEPLOYING…', W / 2, 587, 17, '#9cc255', 'center', '900'); }
+  else text(net ? '←/→ tank  ·  ↑/↓ colour  ·  Enter ready  ·  Esc leave'
+                : '←/→ tank  ·  ↑/↓ colour  ·  Enter ready  ·  Tab next player  ·  Esc back', W / 2, 586, 13, INK_DIM, 'center', '700', 'rgba(0,0,0,.6)');
+  cv.style.cursor = any ? 'pointer' : 'default';
+  drawUIParts();
+}
 function copyInvite() {
   const link = inviteLink();
   const done = () => { copiedAt = T; };
@@ -1658,6 +1834,7 @@ function drawMenu() {
 function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);              // world space (1680 x 945)
   if (mode === 'menu') { drawWorld(menuTanks); ctx.setTransform(S, 0, 0, S, 0, 0); drawMenu(); return; }
+  if (mode === 'armory') { drawWorld(menuTanks); ctx.setTransform(S, 0, 0, S, 0, 0); drawArmory(); return; }
   drawWorld(tanks);
   ctx.setTransform(S, 0, 0, S, 0, 0);              // interface space (1120 x 630) from here on
   uiButtons = [];
@@ -1697,7 +1874,7 @@ function drawOffscreenShells() {
 
 function initMenuScene() {
   numPlayers = 4; makeScene();
-  menuTanks = [0, 1, 2, 3].map(i => { const t = newTank(i); t.x = (130 + i * 285 + rnd(-30, 30)) * S; t.y = ground[Math.floor(t.x)] - 4; t.tilt = tiltAt(t.x); return t; });
+  menuTanks = [0, 1, 2, 3].map(i => { const t = newTank(i); t.model = Math.floor(Math.random() * TANKS.length); t.x = (130 + i * 285 + rnd(-30, 30)) * S; t.y = ground[Math.floor(t.x)] - 4; t.tilt = tiltAt(t.x); return t; });
   numPlayers = 2;
 }
 
@@ -1714,6 +1891,26 @@ addEventListener('keydown', e => {
     return;
   }
   if (k === 'm') { muted = !muted; return; }
+  if (mode === 'armory') {
+    if (k === 'escape') { if (net) leaveRoom(); else { mode = 'menu'; menuStage = 'humans'; loadout = null; } return; }
+    if (k === 'tab' && !net) {   // hot-seat: move the keyboard to the next human player's panel
+      e.preventDefault();
+      const hum = loadout.map((p, j) => p.cpu ? -1 : j).filter(j => j >= 0);
+      armoryFocus = hum[(hum.indexOf(armoryFocus) + 1) % hum.length]; return;
+    }
+    const i = net ? net.seat : armoryFocus;
+    if (!canEditSeat(i)) return;
+    const p = loadout[i];
+    if (k === 'arrowleft') requestPick(i, {model: p.model - 1});
+    else if (k === 'arrowright') requestPick(i, {model: p.model + 1});
+    else if (k === 'arrowup') requestPick(i, {color: cycleColor(i, -1)});
+    else if (k === 'arrowdown') requestPick(i, {color: cycleColor(i, 1)});
+    else if ((k === 'enter' || k === ' ') && !e.repeat) {
+      requestPick(i, {ready: !p.ready});
+      if (!net && loadout[i].ready) { const nx = loadout.findIndex(q => !q.cpu && !q.ready); if (nx >= 0) armoryFocus = nx; }   // hand the keys to the next player
+    }
+    return;
+  }
   if (mode === 'menu') {
     const n = parseInt(e.key);
     if (k === 'escape' || k === 'backspace') {
@@ -1728,7 +1925,7 @@ addEventListener('keydown', e => {
     else if (menuStage === 'lobby' && k === 'enter') startOnline();
     return;
   }
-  if (k === 'escape') { if (net) leaveRoom(); else { mode = 'menu'; menuStage = 'home'; initMenuScene(); } return; }
+  if (k === 'escape') { if (net) leaveRoom(); else { mode = 'menu'; menuStage = 'home'; loadout = null; initMenuScene(); } return; }
   if (k === 'p' && state !== 'over' && !net) { paused = !paused; return; }
   if (k === 't') { assist = !assist; return; }
   if (state === 'over' && k === 'enter' && (!net || net.role === 'host')) { startRound(); return; }
@@ -1757,7 +1954,7 @@ const inRect = (p, b) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= 
 const activePtr = new Map();   // pointer currently dragging a control (power bar / angle dial)
 cv.addEventListener('pointerdown', e => {
   audio(); Object.assign(mouse, toCanvas(e));
-  if (mode === 'menu') {
+  if (mode === 'menu' || mode === 'armory') {
     for (const b of menuButtons) if (inRect(mouse, b)) { b.action(); break; }
     return;
   }

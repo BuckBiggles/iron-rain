@@ -4,7 +4,9 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
 
 **Play:** https://buckbiggles.github.io/scorched-tanks/
 
-- 2–4 tanks (200 armor each), any mix of humans and CPU opponents, on a wide battlefield
+- 2–4 tanks, any mix of humans and CPU opponents, on a wide battlefield
+- **Armory:** before the battle every player picks one of 8 tanks (Warhound, Bulwark, Jackal, Mammoth, Viper,
+  Rhino, Scorpion, Kodiak — each trading armor against mobility) and a colour, then hits READY. CPUs pick at random.
 - **Online multiplayer:** host a room, share the invite link or 5-letter code, friends join from their own browsers
 - Local hot-seat play on one screen is still there too
 - Ground that behaves like loose sand: steep slopes slump, craters cave in, dirt piles spread into dunes
@@ -35,4 +37,5 @@ If someone drops, their tank becomes a CPU.
 | Space | Fire |
 | W A S D | After a hit: press the 4 keys shown, in order, within 2 s |
 | T / M / P | Aim assist / sound / pause (offline only) |
+| Armory | ←/→ tank, ↑/↓ colour, Enter ready, Tab next player (hot-seat) — or click |
 | Esc | Menu / leave room |
