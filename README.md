@@ -1,15 +1,18 @@
-# Scorched Tanks
+# Iron Rain
 
-A Scorched Earth-style armored-artillery game with a military look, in a single HTML file. No build step, no server.
+An armored-artillery game in the spirit of Scorched Earth, with a military look, in a single HTML file. No build step, no server.
 
 **Play:** https://buckbiggles.github.io/scorched-tanks/
 
-- 2–4 tanks, any mix of humans and CPU opponents
+- 2–4 tanks (200 armor each), any mix of humans and CPU opponents, on a wide battlefield
 - **Online multiplayer:** host a room, share the invite link or 5-letter code, friends join from their own browsers
 - Local hot-seat play on one screen is still there too
-- Destructible terrain that behaves like loose sand (steep slopes slump, craters cave in, dirt piles spread), wind, and three weapons (Missile, Big Bomb, Triple)
-- Land a hit, then nail a 1-second W-A-S-D key combo to spin the prize wheel for a one-shot special attack:
-  Nuke, MIRV, Dirt Bomb, Bouncer, Airstrike, Teleport, Vampire
+- Ground that behaves like loose sand: steep slopes slump, craters cave in, dirt piles spread into dunes
+- Wind, and three weapons (Missile, Big Bomb, Triple)
+- Land a hit, then nail a 2-second W-A-S-D key combo to spin the supply-drop wheel for a one-shot special:
+  Nuke, MIRV, Dirt Bomb, Bouncer, Airstrike, Teleport, Vampire, **Orbital Strike** (satellite laser),
+  and four status shells — **Incendiary, Cryo, EMP, Acid** — that leave the tanks they hit
+  Burning / Frozen / Shorted / Corroded: **half power on their next shot**, then it wears off
 
 ## Online play
 
@@ -30,6 +33,6 @@ If someone drops, their tank becomes a CPU.
 | A D | Drive (limited fuel) |
 | 1 2 3 | Choose weapon |
 | Space | Fire |
-| W A S D | After a hit: press the 4 keys shown, in order, within 1 s |
+| W A S D | After a hit: press the 4 keys shown, in order, within 2 s |
 | T / M / P | Aim assist / sound / pause (offline only) |
 | Esc | Menu / leave room |

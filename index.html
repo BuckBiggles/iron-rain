@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Scorched Tanks</title>
+<title>Iron Rain</title>
 <style>
   html,body{margin:0;height:100%;background:#07080d;overflow:hidden;overscroll-behavior:none}
   body{display:flex;align-items:center;justify-content:center}
@@ -11,14 +11,19 @@
 </style>
 </head>
 <body>
-<canvas id="c" width="1120" height="630"></canvas>
+<canvas id="c" width="1680" height="945"></canvas>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
-const W = cv.width, H = cv.height, TAU = Math.PI * 2;
-const G = 0.12, POWER_SCALE = 0.1, WIND_SCALE = 0.004;
-const GROUND_MIN = 200, GROUND_MAX = H - 160;
+// The battlefield ("world") is 1.5x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
+// code works in interface units and is drawn through a 1.5x transform. Result: a bigger map with tanks farther apart,
+// while the interface stays the same size on screen.
+const W = 1120, H = 630, TAU = Math.PI * 2;          // interface units
+const WW = cv.width, WH = cv.height, S = WW / W;     // world units (1680 x 945)
+const G = 0.12, POWER_SCALE = 0.13, WIND_SCALE = 0.004;
+const GROUND_MIN = 300, GROUND_MAX = WH - 240;
+const MAX_HP = 200;
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -31,20 +36,35 @@ const WEAPONS = [
   {name:'Big Bomb', icon:'💣', color:'#ff8a5c', radius:60, damage:75, shots:1, ammo:3},
   {name:'Triple',   icon:'☄️', color:'#8be9fd', radius:24, damage:35, shots:3, ammo:3},
 ];
-// Prize-wheel specials: one use, applied to the winner's next attack
-const SPECIALS = [
-  {name:'NUKE',      icon:'☢️', color:'#ef4444', desc:'Massive blast',          radius:115, damage:100, shots:1, kind:'nuke'},
-  {name:'MIRV',      icon:'🎆', color:'#f59e0b', desc:'Splits into 5 warheads', radius:30,  damage:40,  shots:1, kind:'mirv'},
-  {name:'DIRT BOMB', icon:'🪨', color:'#b4733a', desc:'Buries with dirt',       radius:55,  damage:0,   shots:1, kind:'dirt'},
-  {name:'BOUNCER',   icon:'🏀', color:'#22c55e', desc:'Bounces 3 times',        radius:35,  damage:45,  shots:1, kind:'bounce'},
-  {name:'AIRSTRIKE', icon:'✈️', color:'#3b82f6', desc:'6 bombs rain down',      radius:30,  damage:40,  shots:1, kind:'air'},
-  {name:'TELEPORT',  icon:'🌀', color:'#14b8a6', desc:'Warps you to where it lands', radius:0, damage:0, shots:1, kind:'teleport'},
-  {name:'VAMPIRE',   icon:'🧛', color:'#a855f7', desc:'Heals you by damage dealt', radius:40, damage:55, shots:1, kind:'vamp'},
+// Status effects from the special shells: an afflicted tank fires at HALF POWER on its next shot, then the effect wears off.
+const STATUSES = [
+  {id:'burning',  name:'BURNING',  icon:'🔥', color:'#f07a2c'},
+  {id:'frozen',   name:'FROZEN',   icon:'❄️', color:'#8fd3f4'},
+  {id:'shorted',  name:'SHORTED',  icon:'⚡', color:'#f2d24a'},
+  {id:'corroded', name:'CORRODED', icon:'🧪', color:'#9bd14a'},
 ];
+const STATUS_MULT = 0.5;
+// Prize-wheel specials: one use, applied to the winner's next attack. short = wheel/HUD label, tag = menu blurb
+const SPECIALS = [
+  {name:'NUKE',           short:'NUKE',       icon:'☢️', color:'#ef4444', tag:'Massive blast',     desc:'Massive blast',                       radius:115, damage:100, shots:1, kind:'nuke'},
+  {name:'CRYO SHELL',     short:'CRYO',       icon:'❄️', color:'#6fb8de', tag:'Frozen: ½ power',   desc:'FREEZES targets: ½ power next shot',   radius:34, damage:40, shots:1, kind:'status', status:STATUSES[1]},
+  {name:'MIRV',           short:'MIRV',       icon:'🎆', color:'#f59e0b', tag:'Splits into 5',     desc:'Splits into 5 warheads',              radius:30,  damage:40,  shots:1, kind:'mirv'},
+  {name:'ACID SHELL',     short:'ACID',       icon:'🧪', color:'#86c23c', tag:'Corroded: ½ power', desc:'CORRODES targets: ½ power next shot',  radius:34, damage:40, shots:1, kind:'status', status:STATUSES[3]},
+  {name:'AIRSTRIKE',      short:'AIRSTRIKE',  icon:'✈️', color:'#3b82f6', tag:'6-bomb strike',     desc:'6 bombs rain down',                   radius:30,  damage:40,  shots:1, kind:'air'},
+  {name:'INCENDIARY',     short:'INCENDIARY', icon:'🔥', color:'#e8642c', tag:'Burning: ½ power',  desc:'Sets targets ABLAZE: ½ power next shot', radius:34, damage:40, shots:1, kind:'status', status:STATUSES[0]},
+  {name:'TELEPORT',       short:'TELEPORT',   icon:'🌀', color:'#14b8a6', tag:'Warp to impact',    desc:'Warps you to where it lands',         radius:0,   damage:0,   shots:1, kind:'teleport'},
+  {name:'DIRT BOMB',      short:'DIRT BOMB',  icon:'🪨', color:'#b4733a', tag:'Buries targets',    desc:'Buries with dirt',                    radius:55,  damage:0,   shots:1, kind:'dirt'},
+  {name:'ORBITAL STRIKE', short:'ORBITAL',    icon:'🛰️', color:'#7fd6f5', tag:'Sky laser strike',  desc:'Satellite laser hits where it lands',  radius:46,  damage:130, shots:1, kind:'orbital'},
+  {name:'EMP SHELL',      short:'EMP',        icon:'⚡', color:'#d8b93a', tag:'Shorted: ½ power',  desc:'SHORTS OUT targets: ½ power next shot', radius:34, damage:40, shots:1, kind:'status', status:STATUSES[2]},
+  {name:'BOUNCER',        short:'BOUNCER',    icon:'🏀', color:'#22c55e', tag:'Bounces 3×',        desc:'Bounces 3 times',                     radius:35,  damage:45,  shots:1, kind:'bounce'},
+  {name:'VAMPIRE',        short:'VAMPIRE',    icon:'🧛', color:'#a855f7', tag:'Steals health',     desc:'Heals you by damage dealt',           radius:40,  damage:55,  shots:1, kind:'vamp'},
+];
+const ORBITAL_DELAY = 60;   // frames between the targeting beacon landing and the beam hitting
 const CHILD = {name:'Child', color:'#ffd0a0', radius:26, damage:35, shots:1, kind:'child'};
 // squad colors: olive drab, desert tan, steel blue, brick red — muted but still easy to tell apart
 const COLORS = ['#86a64a', '#d4a95c', '#6f93b3', '#c0583d'];
 const ALLW = [...WEAPONS, ...SPECIALS, CHILD];   // index = id used on the wire
+const GAME_NAME = 'IRON RAIN';
 const FONT = '"Bahnschrift SemiBold Condensed","Bahnschrift","Agency FB","Arial Narrow","Segoe UI",sans-serif';
 const INK = '#e6e0c4', INK_DIM = 'rgba(230,224,196,.62)';   // khaki "stencil paint" text on dark steel
 
@@ -62,12 +82,14 @@ const THEMES = [
 
 // ====================================================== state
 let ground, tanks = [], shots = [], parts = [], rings = [], flashes = [], popups = [], scorches = [];
+let uiParts = [];                // confetti lives in interface space (drawn over the HUD)
+let strikes = [], beams = [];    // orbital strikes: host-side timers / beam visuals on every machine
 let pending = [], hit = [false, false, false, false];
 let wind = 0, turn = 0, state = 'aim', wins = [0, 0, 0, 0], winner = -1;
 let theme = THEMES[0], bgCanvas, texCanvas, vigCanvas, clouds = [], stars = [], streaks = [], menuTanks = [];
 let numPlayers = 2, numHumans = 1, menuStage = 'home';
 let mode = 'menu', paused = false, assist = true, muted = false;
-const TURN_SECONDS = 45, QTE_FRAMES = 60;   // 1-second key combo after a hit
+const TURN_SECONDS = 45, QTE_FRAMES = 120;   // 2-second key combo after a hit
 let qte = null;
 const shuffled = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 let turnFrames = 0, turnLeft = 0;
@@ -108,6 +130,9 @@ const sfx = {
   prize:  () => [784, 988, 1175, 1568].forEach((f, i) => tone(f, f, .3, 'square', .08, i * .08)),
   click:  () => tone(500, 650, .06, 'square', .06),
   fail:   () => { tone(220, 70, .35, 'sawtooth', .12); },
+  charge: () => { tone(120, 1400, 1.0, 'sawtooth', .05); tone(60, 700, 1.0, 'sine', .08); },     // orbital strike spinning up
+  zap:    () => { noise(.7, .5, 6000, 120); tone(1800, 60, .7, 'square', .12); },              // beam hits
+  status: () => { tone(300, 1200, .18, 'triangle', .1); tone(1200, 300, .25, 'sine', .08, .1); },
 };
 
 // ====================================================== helpers (drawing)
@@ -152,11 +177,11 @@ function hazard(x, y, w, h, alpha = 1) {
 
 // ====================================================== scene generation
 function makeTerrain() {
-  ground = new Float32Array(W);
+  ground = new Float32Array(WW);
   const waves = [];
-  for (let i = 0; i < 4; i++) waves.push({a: rnd(25, 75) / (i + 1), f: rnd(0.004, 0.012) * (i + 1), p: rnd(0, TAU)});
-  for (let x = 0; x < W; x++) {
-    let y = H * 0.55;
+  for (let i = 0; i < 4; i++) waves.push({a: rnd(25, 75) * 1.3 / (i + 1), f: rnd(0.004, 0.012) * .8 * (i + 1), p: rnd(0, TAU)});   // wider map: more hills, same steepness
+  for (let x = 0; x < WW; x++) {
+    let y = WH * 0.55;
     for (const w of waves) y += Math.sin(x * w.f + w.p) * w.a;
     ground[x] = clamp(y, GROUND_MIN, GROUND_MAX);
   }
@@ -170,11 +195,11 @@ let sandActive = false, sandQuiet = 0, sandFrames = 0;
 function sandStep(fx = true) {
   let moved = 0;
   const fwd = (T & 1) === 0;              // alternate sweep direction so slides don't lean one way
-  for (let k = 0; k < W - 1; k++) {
-    const x = fwd ? k : W - 2 - k, d = ground[x + 1] - ground[x], ex = Math.abs(d) - REPOSE;
+  for (let k = 0; k < WW - 1; k++) {
+    const x = fwd ? k : WW - 2 - k, d = ground[x + 1] - ground[x], ex = Math.abs(d) - REPOSE;
     if (ex > 0.02) {
       const m = Math.min(ex * 0.45, 2.4), hi = d > 0 ? x : x + 1, lo = d > 0 ? x + 1 : x;   // y grows downward: the smaller y is the higher sand
-      ground[hi] = Math.min(H, ground[hi] + m); ground[lo] -= m; moved += m;
+      ground[hi] = Math.min(WH, ground[hi] + m); ground[lo] -= m; moved += m;
       if (fx && m > .8 && Math.random() < .12) dust(hi, ground[hi]);
     }
   }
@@ -186,28 +211,28 @@ function dust(x, y) {
 function disturbSand() { sandActive = true; sandQuiet = 0; sandFrames = 0; }
 
 function renderBG() {
-  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const c = document.createElement('canvas'); c.width = WW; c.height = WH;
   const g = c.getContext('2d');
-  const sk = g.createLinearGradient(0, 0, 0, H * .85);
+  const sk = g.createLinearGradient(0, 0, 0, WH * .85);
   theme.sky.forEach((col, i) => sk.addColorStop(i / (theme.sky.length - 1), col));
-  g.fillStyle = sk; g.fillRect(0, 0, W, H);
-  const s = theme.sun, sx = s.x * W, sy = s.y * H;
+  g.fillStyle = sk; g.fillRect(0, 0, WW, WH);
+  const s = theme.sun, sx = s.x * WW, sy = s.y * WH;
   const gl = g.createRadialGradient(sx, sy, 0, sx, sy, s.r * 6);
   gl.addColorStop(0, s.glow); gl.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = gl; g.fillRect(0, 0, W, H);
+  g.fillStyle = gl; g.fillRect(0, 0, WW, WH);
   g.fillStyle = s.c; g.beginPath(); g.arc(sx, sy, s.r, 0, TAU); g.fill();
   if (theme.moon) { g.fillStyle = 'rgba(120,130,170,.35)'; for (let i = 0; i < 6; i++) { g.beginPath(); g.arc(sx + rnd(-s.r * .6, s.r * .6), sy + rnd(-s.r * .6, s.r * .6), rnd(2, 6), 0, TAU); g.fill(); } }
   theme.mtn.forEach((col, li) => {
-    const base = H * (.56 + li * .07), amp = 130 - li * 30, p1 = rnd(0, 9), p2 = rnd(0, 9);
-    g.fillStyle = col; g.beginPath(); g.moveTo(0, H);
-    for (let x = 0; x <= W + 8; x += 8) g.lineTo(x, base - amp * (Math.abs(Math.sin(x * .005 * (li + 1) + p1)) * .7 + Math.abs(Math.sin(x * .014 + p2)) * .3));
-    g.lineTo(W, H); g.fill();
+    const base = WH * (.56 + li * .07), amp = (130 - li * 30) * S, p1 = rnd(0, 9), p2 = rnd(0, 9);
+    g.fillStyle = col; g.beginPath(); g.moveTo(0, WH);
+    for (let x = 0; x <= WW + 8; x += 8) g.lineTo(x, base - amp * (Math.abs(Math.sin(x * .005 / S * (li + 1) + p1)) * .7 + Math.abs(Math.sin(x * .014 / S + p2)) * .3));
+    g.lineTo(WW, WH); g.fill();
   });
   // distant war-torn skyline: shelled buildings, dead trees, utility poles, burning wrecks with smoke columns
-  const base = H * .6;
+  const base = WH * .6;
   g.fillStyle = theme.ruin; g.strokeStyle = theme.ruin;
   const fires = [];
-  for (let x = rnd(0, 50); x < W;) {
+  for (let x = rnd(0, 50); x < WW;) {
     const kind = Math.random();
     if (kind < .42) {                                   // ruined building
       const bw = rnd(28, 64), bh = rnd(34, 92);
@@ -230,7 +255,7 @@ function renderBG() {
       x += rnd(100, 160);
     }
   }
-  for (const [i, fx] of fires.slice(0, 3).entries()) {  // smoke columns rising from the wrecks
+  for (const [i, fx] of fires.slice(0, 4).entries()) {  // smoke columns rising from the wrecks
     if (theme.name !== 'Arid' || i === 0) { const fg = g.createRadialGradient(fx, base - 6, 0, fx, base - 6, 46); fg.addColorStop(0, 'rgba(255,150,50,.55)'); fg.addColorStop(1, 'rgba(255,100,20,0)'); g.fillStyle = fg; g.fillRect(fx - 50, base - 56, 100, 100); }
     let px = fx, py = base - 12;
     for (let j = 0; j < 46; j++) {
@@ -238,19 +263,19 @@ function renderBG() {
       g.fillStyle = `rgba(${theme.haze},${Math.max(0, .26 - j * .0045)})`; g.beginPath(); g.arc(px, py, pr, 0, TAU); g.fill();
     }
   }
-  const haze = g.createLinearGradient(0, H * .5, 0, H * .85);
+  const haze = g.createLinearGradient(0, WH * .5, 0, WH * .85);
   haze.addColorStop(0, 'rgba(255,255,255,0)'); haze.addColorStop(1, 'rgba(255,255,255,.12)');
-  g.fillStyle = haze; g.fillRect(0, H * .5, W, H * .4);
+  g.fillStyle = haze; g.fillRect(0, WH * .5, WW, WH * .4);
   return c;
 }
 
 function renderTex() {
-  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const c = document.createElement('canvas'); c.width = WW; c.height = WH;
   const g = c.getContext('2d');
-  for (let i = 0; i < 9000; i++) { g.fillStyle = Math.random() < .5 ? 'rgba(0,0,0,.10)' : 'rgba(255,255,255,.06)'; g.fillRect(rnd(0, W), rnd(0, H), rnd(1, 3), rnd(1, 3)); }
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < 20000; i++) { g.fillStyle = Math.random() < .5 ? 'rgba(0,0,0,.10)' : 'rgba(255,255,255,.06)'; g.fillRect(rnd(0, WW), rnd(0, WH), rnd(1, 3), rnd(1, 3)); }
+  for (let i = 0; i < 200; i++) {
     g.fillStyle = Math.random() < .5 ? 'rgba(0,0,0,.14)' : 'rgba(255,255,255,.08)';
-    g.beginPath(); g.ellipse(rnd(0, W), rnd(GROUND_MIN, H), rnd(3, 9), rnd(2, 5), rnd(0, 3), 0, TAU); g.fill();
+    g.beginPath(); g.ellipse(rnd(0, WW), rnd(GROUND_MIN, WH), rnd(3, 9), rnd(2, 5), rnd(0, 3), 0, TAU); g.fill();
   }
   return c;
 }
@@ -262,19 +287,19 @@ function makeScene(forceTheme, gdata) {
   bgCanvas = renderBG();
   if (!texCanvas) texCanvas = renderTex();
   scorches = [];
-  clouds = Array.from({length: 7}, () => ({x: rnd(0, W), y: rnd(70, 260), s: rnd(.7, 1.6), v: rnd(.05, .18)}));
-  stars = Array.from({length: theme.stars}, () => ({x: rnd(0, W), y: rnd(0, H * .55), r: rnd(.5, 1.7), ph: rnd(0, 9)}));
-  streaks = Array.from({length: 46}, () => ({x: rnd(0, W), y: rnd(80, H - 160), l: rnd(14, 34), s: rnd(.6, 1.4)}));
+  clouds = Array.from({length: 10}, () => ({x: rnd(0, WW), y: rnd(70, 260) * S, s: rnd(.7, 1.6) * 1.2, v: rnd(.05, .18)}));
+  stars = Array.from({length: theme.stars}, () => ({x: rnd(0, WW), y: rnd(0, WH * .55), r: rnd(.5, 1.7), ph: rnd(0, 9)}));
+  streaks = Array.from({length: 70}, () => ({x: rnd(0, WW), y: rnd(120, WH - 240), l: rnd(14, 34), s: rnd(.6, 1.4)}));
 }
 
 // ====================================================== tanks & turns
 function tiltAt(x) {
-  const i0 = clamp(Math.floor(x - 11), 0, W - 1), i1 = clamp(Math.floor(x + 11), 0, W - 1);
+  const i0 = clamp(Math.floor(x - 11), 0, WW - 1), i1 = clamp(Math.floor(x + 11), 0, WW - 1);
   return Math.atan2(ground[i1] - ground[i0], Math.max(1, i1 - i0));
 }
 function newTank(i) {
-  const slot = W / numPlayers, x = slot * i + rnd(slot * 0.25, slot * 0.75);
-  return {i, x, y: ground[Math.floor(x)] - 4, hp: 100, shownHp: 100, angle: x < W / 2 ? 55 : 125, power: 55, weapon: 0,
+  const slot = WW / numPlayers, x = slot * i + rnd(slot * 0.3, slot * 0.7);
+  return {i, x, y: ground[Math.floor(x)] - 4, hp: MAX_HP, shownHp: MAX_HP, status: null, angle: x < WW / 2 ? 55 : 125, power: 55, weapon: 0,
           ammo: WEAPONS.map(w => w.ammo), fuel: 60, color: COLORS[i], vy: 0, special: null, ai: net ? !net.occ[i] : i >= numHumans,
           tilt: tiltAt(x), recoil: 0, dead: false};
 }
@@ -282,6 +307,7 @@ function startRound() {
   makeScene();
   tanks = Array.from({length: numPlayers}, (_, i) => newTank(i));
   shots = []; parts = []; rings = []; flashes = []; popups = []; pending = []; wheel = null; winner = -1; evq = [];
+  strikes = []; beams = []; uiParts = [];
   hit = [false, false, false, false]; shake = 0; whiteFlash = 0; paused = false; terrainDirty = false; sandActive = false;
   mode = 'play';
   if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, v => Math.round(v * 10)), np: numPlayers, ai: tanks.map(t => t.ai)});
@@ -312,8 +338,12 @@ function addP(o) { parts.push(Object.assign({life: 30, max: 0, g: 0, drag: 1, si
 function burst(x, y, n, o) {
   for (let i = 0; i < n; i++) { const a = rnd(0, TAU), s = rnd(o.s0, o.s1); addP(Object.assign({}, o, {x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s + (o.up || 0), life: rnd(o.l0, o.l1), size: rnd(o.z0, o.z1)})); }
 }
-function confetti(x, y, n, spread = 6) {
-  for (let i = 0; i < n; i++) addP({type: 'confetti', x, y, vx: rnd(-spread, spread), vy: rnd(-spread * 1.3, -1), g: .13, drag: .985, life: rnd(90, 170), size: rnd(4, 8), color: pick(['#facc15', '#f87171', '#4ade80', '#60a5fa', '#c084fc', '#fff'])});
+function confetti(x, y, n, spread = 6) {   // interface-space particles, drawn above the HUD
+  for (let i = 0; i < n; i++) {
+    const life = rnd(90, 170);
+    uiParts.push({type: 'confetti', x, y, vx: rnd(-spread, spread), vy: rnd(-spread * 1.3, -1), g: .13, drag: .985, life, max: life, size: rnd(4, 8),
+                  rot: rnd(0, TAU), vr: rnd(-.3, .3), color: pick(['#d4a417', '#c0583d', '#9cc255', '#6f93b3', '#e6e0c4', '#ffffff'])});
+  }
 }
 function explosionFx(x, y, r, color) {
   flashes.push({x, y, r: r * 1.9, life: 10, max: 10});
@@ -333,25 +363,29 @@ function updateFx() {
   T++;
   for (const p of parts) {
     p.vx *= p.drag; p.vy = p.vy * p.drag + p.g; p.x += p.vx; p.y += p.vy; p.life--; p.rot += p.vr;
-    if (p.type === 'dirt' && p.y >= ground[clamp(Math.floor(p.x), 0, W - 1)] && p.vy > 0) p.life = Math.min(p.life, 6);
+    if (p.type === 'dirt' && p.y >= ground[clamp(Math.floor(p.x), 0, WW - 1)] && p.vy > 0) p.life = Math.min(p.life, 6);
   }
-  parts = parts.filter(p => p.life > 0 && p.y < H + 40);
+  parts = parts.filter(p => p.life > 0 && p.y < WH + 40);
   if (parts.length > 1800) parts.splice(0, parts.length - 1800);
+  for (const p of uiParts) { p.vx *= p.drag; p.vy = p.vy * p.drag + p.g; p.x += p.vx; p.y += p.vy; p.life--; p.rot += p.vr; }
+  uiParts = uiParts.filter(p => p.life > 0 && p.y < H + 40);
+  for (const b of beams) b.t++;
+  beams = beams.filter(b => b.t < ORBITAL_DELAY + 40);
   for (const r of rings) r.life--; rings = rings.filter(r => r.life > 0);
   for (const f of flashes) f.life--; flashes = flashes.filter(f => f.life > 0);
   for (const p of popups) { p.y -= .7; p.life--; } popups = popups.filter(p => p.life > 0);
   shake *= .9; if (shake < .15) shake = 0; whiteFlash *= .9;
   const wv = mode === 'menu' ? 3 : wind;
-  for (const c of clouds) { c.x += c.v + wv * .03; if (c.x > W + 120) c.x = -140; if (c.x < -140) c.x = W + 120; }
-  for (const s of streaks) { s.x += wv * .55 * s.s; if (s.x > W + 40) s.x = -40; if (s.x < -40) s.x = W + 40; }
+  for (const c of clouds) { c.x += c.v + wv * .03; if (c.x > WW + 120) c.x = -140; if (c.x < -140) c.x = WW + 120; }
+  for (const s of streaks) { s.x += wv * .55 * s.s; if (s.x > WW + 40) s.x = -40; if (s.x < -40) s.x = WW + 40; }
   if (banner && ++banner.t > 110) banner = null;
 }
 
 // ====================================================== firing & damage
 function crater(cx, cy, r) {
-  for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(W - 1, Math.ceil(cx + r)); x++) {
+  for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(WW - 1, Math.ceil(cx + r)); x++) {
     const dx = x - cx, dy = Math.sqrt(r * r - dx * dx);
-    if (ground[x] >= cy - dy && ground[x] <= cy + dy) ground[x] = Math.min(H, cy + dy);
+    if (ground[x] >= cy - dy && ground[x] <= cy + dy) ground[x] = Math.min(WH, cy + dy);
   }
   disturbSand();
 }
@@ -361,15 +395,20 @@ function fire() {
   if (w) t.special = null;
   else { w = WEAPONS[t.weapon]; if (t.ammo[t.weapon] <= 0) return; t.ammo[t.weapon]--; }
   hit = [false, false, false, false];
-  const m = muzzle(t), v = t.power * POWER_SCALE;
+  const m = muzzle(t), v = t.power * powerMult(t) * POWER_SCALE;
   for (let k = 0; k < w.shots; k++) {
     const a = (t.angle + (k - (w.shots - 1) / 2) * 7) * Math.PI / 180;
     shots.push({id: ++shotId, x: m.x, y: m.y, vx: Math.cos(a) * v, vy: -Math.sin(a) * v, w, owner: turn, trail: [],
                 bounces: w.kind === 'bounce' ? 3 : 0, split: w.kind === 'mirv'});
   }
   emit({t: 'fire', i: turn});
+  if (t.status) {   // a status effect only lasts for the afflicted tank's next shot
+    emit({t: 'pop', x: t.x, y: t.y - 74, s: `${t.status.icon} HALF POWER`, c: t.status.color, z: 16});
+    t.status = null;
+  }
   state = 'fly';
 }
+const powerMult = t => t.status ? STATUS_MULT : 1;
 
 // ---- events: visual/audio happenings. The host emits them (and also sends them to clients); everyone plays them locally.
 function emit(e) { applyEvent(e); if (net && net.role === 'host') evq.push(e); }
@@ -378,7 +417,9 @@ function applyEvent(e) {
     case 'turn': {
       const t = tanks[e.i]; if (!t) return;
       banner = {t: 0, text: `UNIT ${e.i + 1} — FIRE MISSION`, color: t.color,
-                sub: t.ai ? 'CPU' : (net ? (isMine(t) ? 'YOUR ORDERS' : 'ALLIED COMMAND') : 'YOUR ORDERS')};
+                sub: t.status ? `${t.status.icon} ${t.status.name}: HALF POWER THIS SHOT`
+                   : t.ai ? 'CPU' : (net ? (isMine(t) ? 'YOUR ORDERS' : 'ALLIED COMMAND') : 'YOUR ORDERS'),
+                subColor: t.status ? t.status.color : null};
       if (net && isMine(t) && !t.ai) sfx.prize();
       break;
     }
@@ -404,6 +445,21 @@ function applyEvent(e) {
       break;
     }
     case 'ring': rings.push({x: e.x, y: e.y, r0: e.r0, r1: e.r1, life: e.life, max: e.life, color: e.color, w: e.w}); break;
+    case 'orbital': {   // targeting beacon down: beam visuals run on every machine; the host applies the damage
+      beams.push({x: e.x, t: 0});
+      rings.push({x: e.x, y: ground[clamp(Math.floor(e.x), 0, WW - 1)], r0: 70, r1: 10, life: ORBITAL_DELAY, max: ORBITAL_DELAY, color: 'rgba(255,80,60,1)', w: 2});
+      sfx.charge(); break;
+    }
+    case 'stfx': {      // status-shell impact flavour
+      const st = STATUSES[e.k]; if (!st) return;
+      rings.push({x: e.x, y: e.y, r0: 6, r1: e.r * 1.8, life: 22, max: 22, color: st.color, w: 3});
+      if (st.id === 'burning') burst(e.x, e.y, 40, {type: 'fire', s0: .5, s1: 3.5, l0: 26, l1: 50, z0: 4, z1: 8, drag: .95, g: -.03});
+      if (st.id === 'frozen') { burst(e.x, e.y, 34, {type: 'spark', color: '#e8f8ff', s0: 2, s1: 6, l0: 25, l1: 45, z0: 1.5, z1: 2.5, drag: .95, g: .05});
+                                for (let i = 0; i < 24; i++) addP({type: 'dirt', x: e.x, y: e.y, vx: rnd(-3, 3), vy: -rnd(1, 5), g: .12, life: rnd(30, 60), size: rnd(2, 4), color: pick(['#cfefff', '#ffffff', '#9fd6f2'])}); }
+      if (st.id === 'shorted') burst(e.x, e.y, 46, {type: 'spark', color: '#fff6a0', s0: 3, s1: 9, l0: 12, l1: 26, z0: 1.5, z1: 2.5, drag: .9, g: 0});
+      if (st.id === 'corroded') for (let i = 0; i < 36; i++) addP({type: 'dirt', x: e.x + rnd(-8, 8), y: e.y, vx: rnd(-2.6, 2.6), vy: -rnd(1, 4.5), g: .12, life: rnd(30, 60), size: rnd(2, 4.5), color: pick(['#9bd14a', '#6f9e2c', '#c6ec7a'])});
+      sfx.status(); break;
+    }
     case 'pop': popup(e.x, e.y, e.s, e.c, e.z); break;
     case 'conf': confetti(e.x, e.y, e.n, e.sp); break;
     case 'sfx': sfx[e.n] && sfx[e.n](); break;
@@ -412,7 +468,7 @@ function applyEvent(e) {
 
 function explode(x, y, w, owner) {
   if (w.kind === 'dirt') {
-    for (let px = Math.max(0, Math.floor(x - w.radius)); px <= Math.min(W - 1, Math.ceil(x + w.radius)); px++) {
+    for (let px = Math.max(0, Math.floor(x - w.radius)); px <= Math.min(WW - 1, Math.ceil(x + w.radius)); px++) {
       const dy = Math.sqrt(Math.max(0, w.radius * w.radius - (px - x) ** 2));
       if (ground[px] > y - dy) ground[px] = Math.max(60, y - dy);
     }
@@ -421,7 +477,7 @@ function explode(x, y, w, owner) {
     return;
   }
   if (w.kind === 'teleport') {
-    const t = tanks[owner], nx = clamp(x, 16, W - 16);
+    const t = tanks[owner], nx = clamp(x, 16, WW - 16);
     emit({t: 'warp', x: t.x, y: t.y - 8});
     t.x = nx; t.y = ground[Math.floor(nx)] - 4; t.vy = 0; t.tilt = tiltAt(nx);
     emit({t: 'warp', x: t.x, y: t.y - 8});
@@ -429,8 +485,14 @@ function explode(x, y, w, owner) {
     emit({t: 'sfx', n: 'prize'});
     return;
   }
+  if (w.kind === 'orbital') {   // targeting beacon landed: the satellite fires after a short charge-up
+    const sx = clamp(x, 0, WW - 1);
+    strikes.push({x: sx, t: 0, owner, w});
+    emit({t: 'orbital', x: sx});
+    return;
+  }
   if (w.kind === 'air') {
-    for (let i = 0; i < 6; i++) pending.push({id: ++shotId, x: x + (i - 2.5) * 38, y: -20 - i * 25, vx: 0, vy: 3, w: CHILD, owner, trail: [], bounces: 0});
+    for (let i = 0; i < 6; i++) pending.push({id: ++shotId, x: x + (i - 2.5) * 48, y: -20 - i * 25, vx: 0, vy: 3, w: CHILD, owner, trail: [], bounces: 0});
   }
   crater(x, y, w.radius);
   terrainDirty = true;
@@ -443,11 +505,37 @@ function explode(x, y, w, owner) {
       if (dmg <= 0) continue;
       t.hp -= dmg; emit({t: 'pop', x: t.x, y: t.y - 56, s: '-' + dmg, c: '#ff6b5e', z: 22 + dmg / 8});
       if (t.i !== owner) { hit[owner] = true; dealt += dmg; emit({t: 'sfx', n: 'hit'}); }
+      if (w.status && t.hp > 0) {   // status shells: half power on the target's next shot
+        t.status = w.status;
+        emit({t: 'pop', x: t.x, y: t.y - 80, s: `${w.status.icon} ${w.status.name}!`, c: w.status.color, z: 19});
+      }
     }
   }
+  if (w.status) emit({t: 'stfx', k: STATUSES.indexOf(w.status), x, y, r: w.radius});
   if (w.kind === 'vamp' && dealt) {
-    const o = tanks[owner]; o.hp = Math.min(100, o.hp + dealt);
+    const o = tanks[owner]; o.hp = Math.min(MAX_HP, o.hp + dealt);
     emit({t: 'pop', x: o.x, y: o.y - 56, s: '+' + dealt, c: '#a3e635', z: 22});
+  }
+}
+
+// the orbital beam: carves a deep shaft (the sand then caves in) and hits every tank in a vertical column
+function orbitalImpact(s) {
+  const x = s.x, r = s.w.radius;
+  for (let px = Math.max(0, Math.floor(x - r)); px <= Math.min(WW - 1, Math.ceil(x + r)); px++) {
+    const f = 1 - ((px - x) / r) ** 2;
+    if (f > 0) ground[px] = Math.min(WH - 2, ground[px] + 150 * f);
+  }
+  disturbSand(); terrainDirty = true;
+  const gy = ground[clamp(Math.floor(x), 0, WW - 1)];
+  emit({t: 'boom', x, y: gy, r: 70});
+  emit({t: 'sfx', n: 'zap'});
+  for (const t of tanks) {
+    const dx = Math.abs(t.x - x);
+    if (t.hp <= 0 || dx >= r + 14) continue;
+    const dmg = Math.round(s.w.damage * (1 - Math.max(0, dx - 14) / r));
+    if (dmg <= 0) continue;
+    t.hp -= dmg; emit({t: 'pop', x: t.x, y: t.y - 56, s: '-' + dmg, c: '#7fd6f5', z: 22 + dmg / 8});
+    if (t.i !== s.owner) { hit[s.owner] = true; emit({t: 'sfx', n: 'hit'}); }
   }
 }
 
@@ -457,17 +545,17 @@ function simulate(sx, sy, angle, power, windv, collect) {
   for (let i = 0; i < 2000; i++) {
     vx += windv * WIND_SCALE; vy += G; x += vx; y += vy;
     if (collect && i < collect && i % 3 === 0) collect.pts.push([x, y]);
-    if (x < 0 || x >= W) return {x, y, out: true};
+    if (x < 0 || x >= WW) return {x, y, out: true};
     if (y >= ground[Math.floor(x)]) return {x, y};
   }
   return {x, y};
 }
 function previewPoints(t) {
-  const m = muzzle(t), a = t.angle * Math.PI / 180, v = t.power * POWER_SCALE, pts = [];
+  const m = muzzle(t), a = t.angle * Math.PI / 180, v = t.power * powerMult(t) * POWER_SCALE, pts = [];
   let x = m.x, y = m.y, vx = Math.cos(a) * v, vy = -Math.sin(a) * v;
-  for (let i = 0; i < 66; i++) {
+  for (let i = 0; i < 84; i++) {
     vx += wind * WIND_SCALE; vy += G; x += vx; y += vy;
-    if (x < 0 || x >= W || y >= ground[Math.floor(x)]) break;
+    if (x < 0 || x >= WW || y >= ground[Math.floor(x)]) break;
     if (i % 4 === 3) pts.push([x, y]);
   }
   return pts;
@@ -477,9 +565,9 @@ function aiThink(t) {
   const targets = tanks.filter(o => o.i !== t.i && o.hp > 0);
   if (!targets.length) return fire();
   let best = null;
-  const m = muzzle(t);
+  const m = muzzle(t), mult = powerMult(t);   // a status-afflicted CPU knows its shot is halved and compensates
   for (let a = 20; a <= 160; a += 2) for (let p = 20; p <= 100; p += 2) {
-    const r = simulate(m.x, m.y, a, p, wind);
+    const r = simulate(m.x, m.y, a, p * mult, wind);
     if (r.out) continue;
     const d = Math.min(...targets.map(o => Math.hypot(r.x - o.x, r.y - o.y)));
     if (!best || d < best.d) best = {a, p, d};
@@ -499,7 +587,20 @@ function tankCosmetics(t) {
   t.recoil *= .84;
   t.tilt = lerp(t.tilt, tiltAt(t.x), .2);
   if (t.dead && T % 5 === 0) addP({type: 'smoke', x: t.x + rnd(-8, 8), y: t.y - 10, vx: rnd(-.2, .2), vy: -rnd(.5, 1.2), g: -.01, life: rnd(50, 90), size: rnd(5, 9), drag: .98});
-  else if (!t.dead && t.hp < 35 && T % 9 === 0) addP({type: 'smoke', x: t.x + rnd(-8, 8), y: t.y - 12, vx: rnd(-.2, .2), vy: -rnd(.4, 1), g: -.01, life: rnd(40, 70), size: rnd(3, 6), drag: .98});
+  else if (!t.dead && t.hp < MAX_HP * .35 && T % 9 === 0) addP({type: 'smoke', x: t.x + rnd(-8, 8), y: t.y - 12, vx: rnd(-.2, .2), vy: -rnd(.4, 1), g: -.01, life: rnd(40, 70), size: rnd(3, 6), drag: .98});
+  if (t.status && !t.dead) {   // status effect particles
+    const id = t.status.id, px = t.x + rnd(-16, 16), py = t.y - rnd(6, 24);
+    if (id === 'burning') {
+      if (T % 2 === 0) addP({type: 'fire', x: px, y: py, vx: rnd(-.3, .3), vy: -rnd(.6, 1.6), g: -.02, life: rnd(16, 30), size: rnd(3, 6), drag: .97});
+      if (T % 9 === 0) addP({type: 'smoke', x: px, y: py - 8, vx: rnd(-.2, .2), vy: -rnd(.5, 1.1), g: -.01, life: rnd(40, 70), size: rnd(4, 7), drag: .98});
+    } else if (id === 'frozen') {
+      if (T % 6 === 0) addP({type: 'spark', color: '#f2fbff', x: px, y: py, vx: rnd(-.2, .2), vy: -rnd(.1, .5), g: 0, life: rnd(14, 26), size: rnd(1.2, 2), drag: .96});
+    } else if (id === 'shorted') {
+      if (T % 3 === 0) addP({type: 'spark', color: '#fff6a0', x: px, y: py, vx: rnd(-3, 3), vy: rnd(-3, 1), g: .1, life: rnd(6, 14), size: rnd(1.2, 2), drag: .9});
+    } else if (id === 'corroded') {
+      if (T % 5 === 0) addP({type: 'dirt', x: px, y: t.y - rnd(4, 12), vx: rnd(-.3, .3), vy: rnd(0, .6), g: .06, life: rnd(20, 40), size: rnd(1.5, 3), color: pick(['#9bd14a', '#c6ec7a'])});
+    }
+  }
 }
 // keyboard aiming/driving for a human-controlled tank on THIS machine
 function humanControl(t) {
@@ -510,7 +611,7 @@ function humanControl(t) {
   if (keys['arrowdown'])  t.power = Math.max(5, t.power - fine * 0.6);
   const dir = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
   if (dir && t.fuel > 0) {
-    const nx = clamp(t.x + dir * 0.8, 14, W - 14);
+    const nx = clamp(t.x + dir * 0.8, 14, WW - 14);
     if (nx !== t.x && Math.abs(ground[Math.floor(nx)] - ground[Math.floor(t.x)]) < 2.5) {
       t.x = nx; t.fuel -= 0.5;
       if (T % 4 === 0) addP({type: 'smoke', x: t.x - dir * 14, y: t.y + 3, vx: -dir * .4, vy: -.3, g: -.005, life: 25, size: 3, drag: .95});
@@ -540,7 +641,7 @@ function updateGame() {
 
   for (const t of tanks) {
     tankCosmetics(t);
-    const gy = ground[clamp(Math.floor(t.x), 0, W - 1)] - 4;
+    const gy = ground[clamp(Math.floor(t.x), 0, WW - 1)] - 4;
     if (t.y < gy) {
       t.vy += G; t.y = Math.min(gy, t.y + t.vy);
       if (t.y >= gy) {
@@ -570,6 +671,7 @@ function updateGame() {
     // (online: other players' angle/power/position arrive as 'in' messages)
     if (turnFrames > 0 && --turnFrames === 0 && !t.ai) {
       emit({t: 'pop', x: t.x, y: t.y - 72, s: 'TIME UP!', c: '#fca5a5', z: 20});
+      t.status = null;   // a status lasts one turn, even a skipped one
       beginTurn(nextAlive(turn));
     }
   }
@@ -583,11 +685,11 @@ function updateGame() {
       if (s.split && s.vy > 0) {   // MIRV splits at the top of its arc
         s.dead = true;
         emit({t: 'ring', x: s.x, y: s.y, r0: 4, r1: 30, life: 14, color: 'rgba(255,200,80,1)', w: 2});
-        for (let k = -2; k <= 2; k++) pending.push({id: ++shotId, x: s.x, y: s.y, vx: s.vx + k * 0.9, vy: s.vy, w: CHILD, owner: s.owner, trail: [], bounces: 0});
+        for (let k = -2; k <= 2; k++) pending.push({id: ++shotId, x: s.x, y: s.y, vx: s.vx + k * 1.1, vy: s.vy, w: CHILD, owner: s.owner, trail: [], bounces: 0});
         continue;
       }
-      const onGround = s.x >= 0 && s.x < W && s.y >= 0 && s.y >= ground[Math.floor(s.x)];
-      let boom = s.x < 0 || s.x >= W || s.y >= H;
+      const onGround = s.x >= 0 && s.x < WW && s.y >= 0 && s.y >= ground[Math.floor(s.x)];
+      let boom = s.x < 0 || s.x >= WW || s.y >= WH;
       if (onGround && s.bounces > 0) {
         s.bounces--; s.y = ground[Math.floor(s.x)] - 2; s.vy *= -0.7; s.vx *= 0.9;
         explode(s.x, s.y, {radius: 14, damage: 15, kind: 'child', color: s.w.color}, s.owner);
@@ -595,18 +697,20 @@ function updateGame() {
       }
       if (onGround) boom = true;
       if (!boom && s.w.kind !== 'teleport') for (const t of tanks) if (t.hp > 0 && Math.hypot(s.x - t.x, s.y - (t.y - 8)) < 13) boom = true;
-      if (boom) { s.dead = true; if (s.x >= 0 && s.x < W) explode(s.x, Math.min(s.y, H), s.w, s.owner); }
+      if (boom) { s.dead = true; if (s.x >= 0 && s.x < WW) explode(s.x, Math.min(s.y, WH), s.w, s.owner); }
     }
     shots = shots.filter(s => !s.dead).concat(pending); pending = [];
-    if (!shots.length) { state = 'settle'; aiTimer = 45; }
+    for (const st of strikes) if (++st.t === ORBITAL_DELAY) orbitalImpact(st);   // orbital beams fire after their charge-up
+    strikes = strikes.filter(st => st.t < ORBITAL_DELAY + 24);
+    if (!shots.length && !strikes.length) { state = 'settle'; aiTimer = 45; }
   }
 
   if (state === 'quick' && qte) {
     const q = qte;
     if (!q.done) {
       q.t++;
-      if (tanks[turn].ai && !q.ai) q.ai = {next: 14, failAt: Math.random() < .65 ? -1 : Math.floor(rnd(1, 4))};   // CPU nails it ~65% of the time
-      if (q.ai && --q.ai.next <= 0) { qteKey(q.idx === q.ai.failAt ? 'x' : q.seq[q.idx]); q.ai.next = Math.floor(rnd(8, 13)); }
+      if (tanks[turn].ai && !q.ai) q.ai = {next: 24, failAt: Math.random() < .7 ? -1 : Math.floor(rnd(1, 4))};   // CPU nails it ~70% of the time
+      if (q.ai && --q.ai.next <= 0) { qteKey(q.idx === q.ai.failAt ? 'x' : q.seq[q.idx]); q.ai.next = Math.floor(rnd(12, 22)); }
       if (!q.done && q.t > q.limit) qteEnd(false, 'TIMED OUT!');
     } else if (++q.resT > 55) { qte = null; if (q.ok) startWheel(); else beginTurn(nextAlive(turn)); }
   }
@@ -621,7 +725,7 @@ function updateGame() {
   }
 
   if (state === 'settle' && --aiTimer <= 0) {
-    const falling = sandActive || tanks.some(t => t.hp > 0 && (t.vy > 0 || t.y < ground[clamp(Math.floor(t.x), 0, W - 1)] - 4.5));
+    const falling = sandActive || tanks.some(t => t.hp > 0 && (t.vy > 0 || t.y < ground[clamp(Math.floor(t.x), 0, WW - 1)] - 4.5));
     if (!falling) {
       const alive = tanks.filter(t => t.hp > 0);
       if (alive.length <= 1) {
@@ -742,7 +846,7 @@ function hostData(conn, d) {
     if (d.w >= 0 && d.w <= 2 && t.ammo[d.w | 0] > 0) t.weapon = d.w | 0;
     const dx = clamp((+d.x) - t.x, -30, 30);
     if (dx && t.fuel > 0) {
-      const nx = clamp(t.x + dx, 14, W - 14), cost = Math.abs(nx - t.x) / 0.8 * 0.5;
+      const nx = clamp(t.x + dx, 14, WW - 14), cost = Math.abs(nx - t.x) / 0.8 * 0.5;
       if (cost <= t.fuel + 0.01) { t.fuel -= cost; t.x = nx; }
     }
     if (d.t === 'fire') fire();
@@ -751,7 +855,7 @@ function hostData(conn, d) {
 function netBroadcast() {
   const m = {t: 's', st: state, tn: turn, w: wind, wn: winner, ws: wins,
     k: tanks.map(t => [r1(t.x), r1(t.y), Math.round(t.hp), r1(t.angle), r1(t.power), t.weapon, r1(t.fuel),
-                       t.special ? ALLW.indexOf(t.special) : -1, t.ammo.map(a => a === Infinity ? -1 : a)]),
+                       t.special ? ALLW.indexOf(t.special) : -1, t.ammo.map(a => a === Infinity ? -1 : a), t.status ? STATUSES.indexOf(t.status) : -1]),
     sh: shots.map(s => [s.id, r1(s.x), r1(s.y), Math.round(s.vx * 1000) / 1000, Math.round(s.vy * 1000) / 1000, ALLW.indexOf(s.w)]),
     wh: wheel ? [wheel.t, wheel.idx, wheel.spin] : null, tl: turnLeft,
     q: qte ? [qte.seq.join(''), qte.idx, qte.t, qte.limit, qte.done ? 1 : 0, qte.ok ? 1 : 0, qte.resT, qte.msg] : null};
@@ -807,9 +911,9 @@ function fail2(msg) { leaveRoom(msg || 'Could not join.'); menuStage = 'join'; }
 
 function startClientRound(m) {
   numPlayers = m.np; makeScene(m.th, m.g);
-  tanks = m.ai.map((ai, i) => ({i, x: 0, y: 0, tx: 0, ty: 0, ta: 55, tp: 55, init: false, hp: 100, shownHp: 100, angle: 55, power: 55,
+  tanks = m.ai.map((ai, i) => ({i, x: 0, y: 0, tx: 0, ty: 0, ta: 55, tp: 55, init: false, hp: MAX_HP, shownHp: MAX_HP, status: null, angle: 55, power: 55,
     weapon: 0, ammo: [Infinity, 3, 3], fuel: 60, color: COLORS[i], vy: 0, special: null, ai, tilt: 0, recoil: 0, dead: false}));
-  shots = []; parts = []; rings = []; flashes = []; popups = []; wheel = null; winner = -1; banner = null;
+  shots = []; parts = []; rings = []; flashes = []; popups = []; wheel = null; winner = -1; banner = null; strikes = []; beams = []; uiParts = [];
   shake = 0; whiteFlash = 0; state = 'aim'; turn = 0; mode = 'play'; net.sent = false;
 }
 function applySnap(m) {
@@ -818,7 +922,7 @@ function applySnap(m) {
   state = m.st; turn = m.tn; wind = m.w; winner = m.wn; wins = m.ws; turnLeft = m.tl || 0;
   const nowMine = state === 'aim' && turn === net.seat;
   if (state !== 'aim') net.sent = false;
-  if (m.g) for (let x = 0; x < W; x++) {
+  if (m.g) for (let x = 0; x < WW; x++) {
     const nv = m.g[x] / 10;
     if (x % 4 === 0 && Math.abs(nv - ground[x]) > .6 && Math.random() < .12) dust(x, Math.min(nv, ground[x]));   // clients see the slides kick up dust too
     ground[x] = nv;
@@ -827,6 +931,7 @@ function applySnap(m) {
   m.k.forEach((a, i) => {
     const t = tanks[i]; if (!t) return;
     t.hp = a[2]; t.special = a[7] >= 0 ? ALLW[a[7]] : null; t.ammo = a[8].map(v => v < 0 ? Infinity : v); t.dead = t.hp <= 0;
+    t.status = a[9] >= 0 ? STATUSES[a[9]] : null;
     const mineNow = nowMine && i === net.seat;
     if (mineNow && prevMine) return;           // while you're aiming, your local values are the truth
     t.tx = a[0]; t.ty = a[1]; t.ta = a[3]; t.tp = a[4]; t.weapon = a[5]; t.fuel = a[6];
@@ -852,7 +957,7 @@ function updateClient() {
   if (!tanks.length) return;
   const mine = state === 'aim' && turn === net.seat;
   for (const t of tanks) {
-    if (mine && t.i === net.seat) { humanControl(t); t.y = ground[clamp(Math.floor(t.x), 0, W - 1)] - 4; }
+    if (mine && t.i === net.seat) { humanControl(t); t.y = ground[clamp(Math.floor(t.x), 0, WW - 1)] - 4; }
     else if (t.init) { t.x = lerp(t.x, t.tx, .5); t.y = lerp(t.y, t.ty, .5); t.angle = lerp(t.angle, t.ta, .4); t.power = lerp(t.power, t.tp, .4); }
     tankCosmetics(t);
   }
@@ -883,10 +988,10 @@ function tryFire() {
 // ====================================================== drawing: world
 function drawTerrain() {
   ctx.save();
-  ctx.beginPath(); ctx.moveTo(0, H);
-  for (let x = 0; x < W; x++) ctx.lineTo(x + .5, ground[x]);
-  ctx.lineTo(W, H); ctx.closePath();
-  const g = ctx.createLinearGradient(0, GROUND_MIN - 40, 0, H);
+  ctx.beginPath(); ctx.moveTo(0, WH);
+  for (let x = 0; x < WW; x++) ctx.lineTo(x + .5, ground[x]);
+  ctx.lineTo(WW, WH); ctx.closePath();
+  const g = ctx.createLinearGradient(0, GROUND_MIN - 40, 0, WH);
   g.addColorStop(0, theme.dirt[0]); g.addColorStop(.45, theme.dirt[1]); g.addColorStop(1, theme.dirt[2]);
   ctx.fillStyle = g; ctx.fill(); ctx.clip();
   ctx.drawImage(texCanvas, 0, 0);
@@ -896,7 +1001,7 @@ function drawTerrain() {
     ctx.fillStyle = sg; ctx.fillRect(s.x - s.r, s.y - s.r, s.r * 2, s.r * 2);
   }
   ctx.restore();
-  const top = () => { ctx.beginPath(); for (let x = 0; x < W; x++) x ? ctx.lineTo(x + .5, ground[x]) : ctx.moveTo(.5, ground[x]); };
+  const top = () => { ctx.beginPath(); for (let x = 0; x < WW; x++) x ? ctx.lineTo(x + .5, ground[x]) : ctx.moveTo(.5, ground[x]); };
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   ctx.save(); ctx.translate(0, 6); top(); ctx.strokeStyle = 'rgba(0,0,0,.22)'; ctx.lineWidth = 9; ctx.stroke(); ctx.restore();
   top(); ctx.strokeStyle = theme.top; ctx.lineWidth = 6; ctx.stroke();
@@ -982,9 +1087,10 @@ function drawTank(t, active) {
   ctx.restore();
   if (dead) return;
   // unit tag + armor bar above the tank
-  text('0' + (t.i + 1), t.x, t.y - 54, 12, INK, 'center', '800', 'rgba(0,0,0,.75)');
+  text('0' + (t.i + 1), t.x, t.y - 55, 14, INK, 'center', '800', 'rgba(0,0,0,.75)');
+  if (t.status) text(t.status.icon, t.x + 21, t.y - 55, 14, '#fff', 'center');
   rr(t.x - 19, t.y - 49, 38, 6, 2); ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fill();
-  const hp = clamp(t.shownHp / 100, 0, 1);
+  const hp = clamp(t.shownHp / MAX_HP, 0, 1);
   if (hp > .01) { rr(t.x - 18, t.y - 48, 36 * hp, 4, 1); ctx.fillStyle = hp > .5 ? '#9cc255' : hp > .25 ? '#e0b23c' : '#d6492f'; ctx.fill(); }
   if (active) {
     const b = Math.sin(T * .12) * 3;
@@ -1003,7 +1109,7 @@ function drawAimHelpers(t) {
     const r = d % 45 === 0 ? 7 : 4, c = Math.cos(d * Math.PI / 180), s = Math.sin(d * Math.PI / 180);
     ctx.beginPath(); ctx.moveTo(p.x + c * 46, p.y - s * 46); ctx.lineTo(p.x + c * (46 + r), p.y - s * (46 + r)); ctx.stroke();
   }
-  const len = 34 + t.power * .75;
+  const len = 34 + t.power * powerMult(t) * .75;
   ctx.setLineDash([6, 6]); ctx.lineDashOffset = -T * .5; ctx.strokeStyle = t.color; ctx.lineWidth = 2; ctx.globalAlpha = .8;
   ctx.beginPath(); ctx.moveTo(p.x + Math.cos(a) * 30, p.y - Math.sin(a) * 30); ctx.lineTo(p.x + Math.cos(a) * len, p.y - Math.sin(a) * len); ctx.stroke();
   ctx.restore();
@@ -1042,15 +1148,11 @@ function drawParts() {
       ctx.globalAlpha = t * .4; ctx.fillStyle = '#5b5d68';
       ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (1 + (1 - t) * 1.8), 0, TAU); ctx.fill();
     } else if (p.type === 'spark') {
-      ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = t; ctx.strokeStyle = '#ffd27a'; ctx.lineWidth = p.size;
+      ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = t; ctx.strokeStyle = p.color || '#ffd27a'; ctx.lineWidth = p.size;
       ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 2.2, p.y - p.vy * 2.2); ctx.stroke();
       ctx.globalCompositeOperation = 'source-over';
     } else if (p.type === 'dirt') {
       ctx.globalAlpha = Math.min(1, t * 3); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.size, p.size);
-    } else if (p.type === 'confetti') {
-      ctx.globalAlpha = Math.min(1, t * 2); ctx.fillStyle = p.color;
-      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.scale(1, Math.abs(Math.sin(p.rot * 1.7)) + .2);
-      ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2); ctx.restore();
     }
   }
   ctx.globalAlpha = 1;
@@ -1074,23 +1176,88 @@ function drawParts() {
   ctx.globalAlpha = 1;
 }
 
+// status effects drawn on the tank: ice crust, fire glow, electric arcs, acid sheen
+function drawStatusFx(t) {
+  const id = t.status.id;
+  ctx.save(); ctx.translate(t.x, t.y + 4);
+  if (id === 'burning' || id === 'corroded') {
+    const g = ctx.createRadialGradient(0, -14, 2, 0, -14, 34);
+    g.addColorStop(0, id === 'burning' ? `rgba(255,120,30,${.32 + Math.sin(T * .3) * .08})` : 'rgba(150,220,60,.30)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = g; ctx.fillRect(-36, -50, 72, 60); ctx.globalCompositeOperation = 'source-over';
+  }
+  ctx.rotate(t.tilt);
+  if (id === 'frozen') {
+    const crust = [[-23, 1], [-24, -12], [-17, -21], [-9, -31], [5, -31], [13, -24], [24, -14], [23, 1]];
+    poly(crust); ctx.fillStyle = 'rgba(175,225,255,.38)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(235,250,255,.85)'; ctx.lineWidth = 1.2; ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,.45)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(-15, -6); ctx.lineTo(-6, -24); ctx.moveTo(4, -9); ctx.lineTo(12, -22); ctx.moveTo(-2, -3); ctx.lineTo(9, -14); ctx.stroke();
+    ctx.fillStyle = 'rgba(210,240,255,.85)';                    // icicles hanging off the skirt
+    for (const ix of [-16, -8, 2, 11, 18]) { ctx.beginPath(); ctx.moveTo(ix - 2, -9.5); ctx.lineTo(ix + 2, -9.5); ctx.lineTo(ix, -4 - (ix % 3 + 3)); ctx.closePath(); ctx.fill(); }
+  } else if (id === 'shorted') {
+    ctx.strokeStyle = '#d8f6ff'; ctx.lineWidth = 1.6; glow('#9fe8ff', 10);
+    for (let k = 0; k < 3; k++) {                                // fresh lightning every frame
+      let x = rnd(-18, 18), y = rnd(-28, -6); ctx.beginPath(); ctx.moveTo(x, y);
+      for (let s = 0; s < 4; s++) { x += rnd(-9, 9); y += rnd(-7, 7); ctx.lineTo(x, y); }
+      ctx.stroke();
+    }
+    noGlow();
+  } else if (id === 'corroded') {
+    ctx.fillStyle = 'rgba(140,210,50,.55)';                      // acid drips down the hull
+    for (const dx of [-12, -3, 7, 15]) { const len = 4 + (((T * .15 + dx) % 6) + 6) % 6; ctx.fillRect(dx, -13, 1.6, len); }
+  }
+  ctx.restore();
+}
+
+// orbital strike: red targeting laser + shrinking reticle while it charges, then a blinding beam from the top of the sky
+function drawBeams() {
+  for (const b of beams) {
+    const gy = ground[clamp(Math.floor(b.x), 0, WW - 1)];
+    if (b.t < ORBITAL_DELAY) {
+      const p = b.t / ORBITAL_DELAY, pulse = .45 + .35 * Math.sin(T * .6);
+      ctx.save();
+      ctx.strokeStyle = `rgba(255,70,50,${pulse})`; ctx.lineWidth = 1.5 + p * 1.5; ctx.setLineDash([10, 6]); ctx.lineDashOffset = -T * 2;
+      ctx.beginPath(); ctx.moveTo(b.x, 0); ctx.lineTo(b.x, gy); ctx.stroke(); ctx.setLineDash([]);
+      const rr2 = 60 - 40 * p;
+      ctx.strokeStyle = `rgba(255,90,60,${.5 + .4 * p})`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(b.x, gy - 2, rr2, 0, TAU); ctx.stroke();
+      for (const a of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) { ctx.beginPath(); ctx.moveTo(b.x + Math.cos(a) * (rr2 + 4), gy - 2 + Math.sin(a) * (rr2 + 4)); ctx.lineTo(b.x + Math.cos(a) * (rr2 + 14), gy - 2 + Math.sin(a) * (rr2 + 14)); ctx.stroke(); }
+      text('ORBITAL STRIKE INBOUND', b.x, gy - rr2 - 26, 13, '#ff8a6a', 'center', '900', 'rgba(0,0,0,.7)');
+      ctx.restore();
+    } else {
+      const k = (b.t - ORBITAL_DELAY) / 26, w = 52 * Math.sin(Math.PI * Math.min(1, k));
+      if (w <= 0) continue;
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      const g = ctx.createLinearGradient(b.x - w, 0, b.x + w, 0);
+      g.addColorStop(0, 'rgba(90,200,255,0)'); g.addColorStop(.3, 'rgba(120,220,255,.55)'); g.addColorStop(.5, 'rgba(255,255,255,.95)');
+      g.addColorStop(.7, 'rgba(120,220,255,.55)'); g.addColorStop(1, 'rgba(90,200,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(b.x - w, 0, w * 2, gy + 8);
+      const rg = ctx.createRadialGradient(b.x, gy, 0, b.x, gy, w * 2.4);
+      rg.addColorStop(0, 'rgba(200,245,255,.8)'); rg.addColorStop(1, 'rgba(90,200,255,0)');
+      ctx.fillStyle = rg; ctx.fillRect(b.x - w * 2.4, gy - w * 2.4, w * 4.8, w * 4.8);
+      ctx.restore();
+    }
+  }
+}
+
 function drawWorld(actors) {
   ctx.save();
   if (shake) ctx.translate(rnd(-shake, shake), rnd(-shake, shake));
   drawBackdrop(); drawWindStreaks(); drawTerrain();
   for (const t of actors) if (t.hp <= 0) drawTank(t, false);
   for (const t of actors) if (t.hp > 0) drawTank(t, mode === 'play' && state === 'aim' && t.i === turn);
+  for (const t of actors) if (t.hp > 0 && t.status) drawStatusFx(t);
   if (mode === 'play' && state === 'aim' && !paused) drawAimHelpers(tanks[turn]);
-  drawShots(); drawParts();
+  drawShots(); drawParts(); drawBeams();
   ctx.restore();
   if (!vigCanvas) {   // darkened corners + a faint olive grade, like a battlefield camera feed
-    vigCanvas = document.createElement('canvas'); vigCanvas.width = W; vigCanvas.height = H;
-    const v = vigCanvas.getContext('2d'), vg = v.createRadialGradient(W / 2, H / 2, H * .42, W / 2, H / 2, W * .66);
-    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(6,8,4,.5)'); v.fillStyle = vg; v.fillRect(0, 0, W, H);
-    v.fillStyle = 'rgba(60,70,30,.07)'; v.fillRect(0, 0, W, H);
+    vigCanvas = document.createElement('canvas'); vigCanvas.width = WW; vigCanvas.height = WH;
+    const v = vigCanvas.getContext('2d'), vg = v.createRadialGradient(WW / 2, WH / 2, WH * .42, WW / 2, WH / 2, WW * .66);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(6,8,4,.5)'); v.fillStyle = vg; v.fillRect(0, 0, WW, WH);
+    v.fillStyle = 'rgba(60,70,30,.07)'; v.fillRect(0, 0, WW, WH);
   }
   ctx.drawImage(vigCanvas, 0, 0);
-  if (whiteFlash > .02) { ctx.fillStyle = `rgba(255,255,255,${whiteFlash})`; ctx.fillRect(0, 0, W, H); }
+  if (whiteFlash > .02) { ctx.fillStyle = `rgba(255,255,255,${whiteFlash})`; ctx.fillRect(0, 0, WW, WH); }
 }
 
 // ====================================================== drawing: HUD
@@ -1111,12 +1278,13 @@ function drawCards() {
     const you = net && i === net.seat;
     text(t.ai ? 'CPU' : you ? 'YOU' : 'OPERATOR', x + cw - 12, y + 17, 11, you ? t.color : INK_DIM, 'right', you ? '900' : '700');
     // armor: segmented bar
-    const bx = x + 52, bw = cw - 104, hp = clamp(t.shownHp / 100, 0, 1), segs = 20, sw = (bw - (segs - 1) * 1.5) / segs, lit = Math.ceil(hp * segs - .001);
+    const bx = x + 52, bw = cw - 104, hp = clamp(t.shownHp / MAX_HP, 0, 1), segs = 20, sw = (bw - (segs - 1) * 1.5) / segs, lit = Math.ceil(hp * segs - .001);
     const base = hp > .5 ? '#9cc255' : hp > .25 ? '#e0b23c' : '#d6492f';
     for (let k = 0; k < segs; k++) { ctx.fillStyle = k < lit ? base : 'rgba(255,255,255,.08)'; ctx.fillRect(bx + k * (sw + 1.5), y + 29, sw, 12); }
     text(String(Math.max(0, Math.round(t.hp))), x + cw - 46, y + 33, 13, INK, 'left', '800');
     text('★'.repeat(Math.min(wins[i], 6)) + (wins[i] > 6 ? ' ×' + wins[i] : '') || '', x + 52, y + 51, 12, '#e2b93a', 'left', '700');
     if (!wins[i]) text('NO VICTORIES', x + 52, y + 51, 10, 'rgba(230,224,196,.32)', 'left', '700');
+    if (t.status && t.hp > 0) text(`${t.status.icon} ${t.status.name}`, x + cw - 46, y + 51, 10, t.status.color, 'right', '900');
     if (t.special) {
       const pulse = 1 + Math.sin(T * .15) * .08;
       ctx.save(); glow(t.special.color, 14); ctx.fillStyle = t.special.color + '55';
@@ -1159,13 +1327,19 @@ function drawControlPanel() {
   text(Math.round(t.angle) + '°', gx, gy - 20, 18, INK, 'center', '800');
   text('ANGLE', gx, y0 + 12, 10, 'rgba(255,255,255,.55)', 'center', '800');
   // power
-  const px = 240, pw = 310;
-  text('POWER', px, y0 + 16, 11, INK_DIM, 'left', '800');
-  text(String(Math.round(t.power)), px + pw, y0 + 16, 18, INK, 'right', '800');
-  const segs = 28, sw = (pw - (segs - 1) * 2) / segs, lit = Math.round(t.power / 100 * segs);
+  const px = 240, pw = 310, st = t.status, eff = t.power * powerMult(t);
+  if (st) {   // status effect: this shot fires at half power — show the dial value AND what actually comes out
+    text(`POWER ×½ — ${st.icon} ${st.name}`, px, y0 + 16, 11, st.color, 'left', '900');
+    text(`${Math.round(t.power)} → ${Math.round(eff)}`, px + pw, y0 + 16, 18, st.color, 'right', '800');
+  } else {
+    text('POWER', px, y0 + 16, 11, INK_DIM, 'left', '800');
+    text(String(Math.round(t.power)), px + pw, y0 + 16, 18, INK, 'right', '800');
+  }
+  const segs = 28, sw = (pw - (segs - 1) * 2) / segs, lit = Math.round(eff / 100 * segs), litDial = Math.round(t.power / 100 * segs);
   for (let i = 0; i < segs; i++) {
     const f = i / (segs - 1), c = f < .5 ? '#9cc255' : f < .8 ? '#e0b23c' : '#d6492f';
-    ctx.fillStyle = i < lit ? c : 'rgba(255,255,255,.09)'; rr(px + i * (sw + 2), y0 + 28, sw, 20, 2.5); ctx.fill();
+    ctx.fillStyle = i < lit ? c : (st && i < litDial) ? st.color + '44' : 'rgba(255,255,255,.09)';   // lost power shown faint
+    rr(px + i * (sw + 2), y0 + 28, sw, 20, 2.5); ctx.fill();
   }
   text('FUEL', px, y0 + 62, 10, INK_DIM, 'left', '800');
   rr(px + 40, y0 + 58, pw - 40, 8, 4); ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fill();
@@ -1188,7 +1362,7 @@ function drawControlPanel() {
   ctx.save(); if (sp) glow(sp.color, 14 + Math.sin(T * .15) * 5);
   rr(x3, sy, 96, sh, 10); ctx.fillStyle = sp ? sp.color + '33' : 'rgba(255,255,255,.03)'; ctx.fill();
   ctx.strokeStyle = sp ? sp.color : 'rgba(255,255,255,.12)'; ctx.lineWidth = sp ? 2 : 1; ctx.setLineDash(sp ? [] : [4, 4]); ctx.stroke(); ctx.restore();
-  if (sp) { text(sp.icon, x3 + 48, sy + 24, 22, '#fff', 'center'); text(sp.name, x3 + 48, sy + 46, 11, '#fff', 'center', '800'); text('SUPPLY', x3 + 8, sy + 10, 9, sp.color, 'left', '800'); }
+  if (sp) { text(sp.icon, x3 + 48, sy + 24, 22, '#fff', 'center'); text(sp.short || sp.name, x3 + 48, sy + 46, 11, '#fff', 'center', '800'); text('SUPPLY', x3 + 8, sy + 10, 9, sp.color, 'left', '800'); }
   else { text('SUPPLY', x3 + 48, sy + 22, 11, 'rgba(230,224,196,.3)', 'center', '800'); text('earned by hits', x3 + 48, sy + 42, 10, 'rgba(230,224,196,.3)', 'center'); }
   // fire button
   const mineT = isMine(t) && !t.ai;
@@ -1222,7 +1396,7 @@ function drawBanner() {
   ctx.save(); ctx.globalAlpha = Math.max(0, a); ctx.translate(off, 0);
   glow(banner.color, 20); panel(W / 2 - 170, 134, 340, 52, 26, banner.color, 2); noGlow();
   text(banner.text, W / 2, 154, 22, '#fff', 'center', '900');
-  text(banner.sub, W / 2, 174, 11, banner.color, 'center', '800');
+  text(banner.sub, W / 2, 174, 11, banner.subColor || banner.color, 'center', '800');
   ctx.restore();
 }
 
@@ -1252,7 +1426,6 @@ function drawQuick() {
   text((Math.max(0, q.limit - q.t) / 60).toFixed(1) + 's', cx + bw / 2 + 36, by + 8, 14, '#fff', 'left', '800');
   if (q.done) text(q.msg, cx, y0 + 104, 38, q.ok ? '#86efac' : '#fca5a5', 'center', '900', 'rgba(0,0,0,.7)');
   ctx.restore();
-  drawParts();
 }
 
 function drawWheel() {
@@ -1281,10 +1454,10 @@ function drawWheel() {
     g.addColorStop(0, shade(sp.color, .08)); g.addColorStop(1, shade(sp.color, -.42));
     ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, a0, a0 + step); ctx.closePath(); ctx.fill();
     if (win && Math.floor(T / 8) % 2) { ctx.fillStyle = 'rgba(255,255,255,.28)'; ctx.fill(); }
-    ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 1.6; ctx.stroke();
     ctx.save(); ctx.translate(cx, cy); ctx.rotate(a0 + step / 2);
-    text(sp.name, r - 14, 0, 14, '#fff', 'right', '900', 'rgba(0,0,0,.45)');
-    ctx.save(); ctx.translate(r - 112, 0); ctx.rotate(Math.PI / 2); text(sp.icon, 0, 0, 28, '#fff', 'center'); ctx.restore();
+    text(sp.short || sp.name, r - 12, 0, 12.5, '#fff', 'right', '900', 'rgba(0,0,0,.5)');
+    ctx.save(); ctx.translate(r - 104, 0); ctx.rotate(Math.PI / 2); text(sp.icon, 0, 0, 21, '#fff', 'center'); ctx.restore();
     ctx.restore();
   }
   ctx.fillStyle = '#1d2016'; ctx.beginPath(); ctx.arc(cx, cy, 24, 0, TAU); ctx.fill();
@@ -1303,7 +1476,6 @@ function drawWheel() {
     text(sp.desc + ' — loaded for your next shot', -178, 16, 13, 'rgba(255,255,255,.75)', 'left', '600');
     ctx.restore();
   }
-  drawParts();
 }
 
 function drawOver() {
@@ -1322,7 +1494,6 @@ function drawOver() {
   const hint = net && net.role === 'client' ? 'Waiting for the host to start the next round…     ·     ESC  leave'
     : `ENTER  next round     ·     ESC  ${net ? 'close room' : 'main menu'}`;
   text(hint, W / 2, 395, 16, '#fff', 'center', '700', 'rgba(0,0,0,.6)');
-  drawParts();
 }
 
 // ====================================================== drawing: menu
@@ -1409,21 +1580,36 @@ function drawOnlineMenus() {
   }
   if (netMsg && menuStage !== 'lobby') text(netMsg, W / 2, menuStage === 'join' ? 436 : 190, 14, '#fca5a5', 'center', '800', 'rgba(0,0,0,.6)');
   cv.style.cursor = any ? 'pointer' : 'default';
-  drawParts();
+  drawUIParts();
 }
 
+// title: stencil lettering (gaps cut through the round letters) rendered once to an offscreen canvas
+let titleCanvas = null, titleWidth = 0;
+function renderTitle() {
+  const w = 900, h = 120, c = document.createElement('canvas'); c.width = w * S; c.height = h * S;
+  const g = c.getContext('2d'); g.scale(S, S);
+  try { g.letterSpacing = '9px'; } catch (e) {}
+  g.font = `900 76px ${FONT}`; g.textAlign = 'left'; g.textBaseline = 'middle';
+  titleWidth = g.measureText(GAME_NAME).width;
+  const x0 = (w - titleWidth) / 2, tg = g.createLinearGradient(0, 30, 0, 90);
+  tg.addColorStop(0, '#f1e9bd'); tg.addColorStop(.55, '#bdb06c'); tg.addColorStop(1, '#7a7440');
+  g.lineWidth = 11; g.strokeStyle = 'rgba(14,16,8,.95)'; g.lineJoin = 'miter'; g.strokeText(GAME_NAME, x0, h / 2);
+  g.fillStyle = tg; g.fillText(GAME_NAME, x0, h / 2);
+  g.globalCompositeOperation = 'destination-out';   // stencil bridges through letters with enclosed shapes
+  for (let i = 0; i < GAME_NAME.length; i++) {
+    if (!'ABDOPQRCGU0'.includes(GAME_NAME[i])) continue;
+    const cx = x0 + g.measureText(GAME_NAME.slice(0, i)).width + (g.measureText(GAME_NAME[i]).width - 9) / 2;
+    g.fillRect(cx - 1.6, 14, 3.2, h - 28);
+  }
+  titleCanvas = c;
+}
 function drawMenu() {
   menuButtons = [];
   ctx.fillStyle = 'rgba(8,10,5,.38)'; ctx.fillRect(0, 0, W, H);
-  // title: stencil lettering on a hazard-striped banner
-  hazard(W / 2 - 340, 36, 680, 7, .85); hazard(W / 2 - 340, 126, 680, 7, .85);
-  try { ctx.letterSpacing = '9px'; } catch (e) {}
-  ctx.font = `900 76px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const tg = ctx.createLinearGradient(0, 55, 0, 112); tg.addColorStop(0, '#f1e9bd'); tg.addColorStop(.55, '#bdb06c'); tg.addColorStop(1, '#7a7440');
-  ctx.lineWidth = 11; ctx.strokeStyle = 'rgba(14,16,8,.95)'; ctx.lineJoin = 'miter'; ctx.strokeText('SCORCHED TANKS', W / 2, 83);
-  ctx.save(); glow('rgba(0,0,0,.7)', 14); ctx.fillStyle = tg; ctx.fillText('SCORCHED TANKS', W / 2, 83); ctx.restore();
-  ctx.fillStyle = 'rgba(14,16,8,.9)'; for (const sx of [W / 2 - 128, W / 2 + 118, W / 2 - 330 + 150]) ctx.fillRect(sx, 52, 3, 62);   // stencil bridges
-  try { ctx.letterSpacing = '0px'; } catch (e) {}
+  if (!titleCanvas) renderTitle();
+  const bw = Math.min(W - 80, titleWidth + 150);
+  hazard(W / 2 - bw / 2, 36, bw, 7, .85); hazard(W / 2 - bw / 2, 126, bw, 7, .85);
+  ctx.save(); glow('rgba(0,0,0,.7)', 14); ctx.drawImage(titleCanvas, W / 2 - 450, 83 - 60, 900, 120); ctx.restore();
   text('ARMORED ARTILLERY COMMAND  ·  DESTRUCTIBLE TERRAIN  ·  SUPPLY DROPS  ·  ONLINE OPS', W / 2, 153, 14, INK, 'center', '800', 'rgba(0,0,0,.6)');
 
   if (['join', 'connecting', 'lobby'].includes(menuStage)) { drawOnlineMenus(); return; }
@@ -1459,21 +1645,23 @@ function drawMenu() {
   [['←  →', 'aim the barrel'], ['↑  ↓', 'set power  (hold Shift for fine)'], ['A  D', 'drive (limited fuel)'], ['1  2  3', 'pick weapon'], ['SPACE', 'fire!'], ['T / M / P', 'aim assist / sound / pause']]
     .forEach(([k, d], i) => { const y = 444 + i * 24; rr(84, y - 10, 82, 20, 6); ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.fill(); text(k, 125, y + 1, 12, '#fff', 'center', '800'); text(d, 180, y + 1, 13, 'rgba(255,255,255,.85)', 'left', '600'); });
   panel(550, 392, 510, 200, 16);
-  text('HIT AN ENEMY → AUTH CODE → SUPPLY DROP', 574, 416, 14, '#d4a417', 'left', '900');
-  SPECIALS.forEach((s, i) => {
-    const x = 574 + (i % 2) * 245, y = 447 + Math.floor(i / 2) * 40;
-    rr(x, y - 17, 235, 34, 10); ctx.fillStyle = s.color + '33'; ctx.fill(); ctx.strokeStyle = s.color + 'aa'; ctx.lineWidth = 1.5; ctx.stroke();
-    text(s.icon, x + 22, y + 1, 20, '#fff', 'center'); text(s.name, x + 42, y - 6, 12, '#fff', 'left', '900'); text(s.desc, x + 42, y + 9, 10.5, 'rgba(255,255,255,.7)', 'left', '600');
+  text('HIT AN ENEMY → AUTH CODE → SUPPLY DROP', 574, 414, 14, '#d4a417', 'left', '900');
+  SPECIALS.forEach((s, i) => {   // 12 prizes in a 3 x 4 grid
+    const x = 566 + (i % 3) * 162, y = 449 + Math.floor(i / 3) * 36;
+    rr(x, y - 16, 154, 32, 8); ctx.fillStyle = s.color + '33'; ctx.fill(); ctx.strokeStyle = s.color + 'aa'; ctx.lineWidth = 1.5; ctx.stroke();
+    text(s.icon, x + 16, y + 1, 16, '#fff', 'center'); text(s.name, x + 30, y - 6, 11.5, '#fff', 'left', '900'); text(s.tag, x + 30, y + 8, 9.5, 'rgba(255,255,255,.72)', 'left', '700');
   });
-  drawParts();
+  drawUIParts();
 }
 
 // ====================================================== main draw/loop
 function draw() {
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  if (mode === 'menu') { drawWorld(menuTanks); drawMenu(); return; }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);              // world space (1680 x 945)
+  if (mode === 'menu') { drawWorld(menuTanks); ctx.setTransform(S, 0, 0, S, 0, 0); drawMenu(); return; }
   drawWorld(tanks);
+  ctx.setTransform(S, 0, 0, S, 0, 0);              // interface space (1120 x 630) from here on
   uiButtons = [];
+  drawOffscreenShells();
   drawCards(); drawWind(); drawControlPanel(); drawBanner();
   if (state === 'quick' && qte) drawQuick();
   if (state === 'wheel' && wheel) drawWheel();
@@ -1483,12 +1671,33 @@ function draw() {
     text('PAUSED', W / 2, H / 2 - 10, 60, '#fff', 'center', '900', 'rgba(0,0,0,.6)');
     text('press P to resume', W / 2, H / 2 + 40, 16, 'rgba(255,255,255,.7)', 'center', '700');
   }
+  drawUIParts();
   cv.style.cursor = 'default';
+}
+
+function drawUIParts() {   // confetti, in interface space
+  for (const p of uiParts) {
+    ctx.globalAlpha = Math.min(1, p.life / p.max * 2); ctx.fillStyle = p.color;
+    ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.scale(1, Math.abs(Math.sin(p.rot * 1.7)) + .2);
+    ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2); ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// shells that fly above the top of the screen: a marker at the top edge with their altitude
+function drawOffscreenShells() {
+  for (const s of shots) {
+    if (s.y > -12) continue;
+    const ux = clamp(s.x / S, 10, W - 10), uy = 116, alt = Math.round(-s.y / 10);
+    ctx.fillStyle = s.w.color || INK;
+    ctx.beginPath(); ctx.moveTo(ux, uy - 8); ctx.lineTo(ux - 6, uy + 2); ctx.lineTo(ux + 6, uy + 2); ctx.closePath(); ctx.fill();
+    text('▲ ' + alt + 'm', ux, uy + 12, 10, INK, 'center', '800', 'rgba(0,0,0,.7)');
+  }
 }
 
 function initMenuScene() {
   numPlayers = 4; makeScene();
-  menuTanks = [0, 1, 2, 3].map(i => { const t = newTank(i); t.x = 130 + i * 285 + rnd(-30, 30); t.y = ground[Math.floor(t.x)] - 4; t.tilt = tiltAt(t.x); return t; });
+  menuTanks = [0, 1, 2, 3].map(i => { const t = newTank(i); t.x = (130 + i * 285 + rnd(-30, 30)) * S; t.y = ground[Math.floor(t.x)] - 4; t.tilt = tiltAt(t.x); return t; });
   numPlayers = 2;
 }
 
