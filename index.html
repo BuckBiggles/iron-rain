@@ -37,6 +37,7 @@ const WEAPONS = [
   {name:'Missile',  icon:'🚀', color:'#ffd966', radius:32, damage:45, shots:1, ammo:Infinity},
   {name:'Big Bomb', icon:'💣', color:'#ff8a5c', radius:60, damage:75, shots:1, ammo:3},
   {name:'Triple',   icon:'☄️', color:'#8be9fd', radius:24, damage:35, shots:3, ammo:3},
+  {name:'Drill',    icon:'⛏️', color:'#e0a84a', radius:34, damage:55, shots:1, ammo:2, kind:'drill', bore:480},   // bores through earth
 ];
 // Status effects from the special shells: an afflicted tank fires at HALF POWER on its next shot, then the effect wears off.
 const STATUSES = [
@@ -378,7 +379,7 @@ function makeScene(forceTheme, gdata, mi) {
   spawnFighter(0, Math.random() < .5); spawnFighter(1, Math.random() < .5);   // open on a fight already underway
   planes.forEach(p => { p.x = rnd(WW * .15, WW * .85); });
   veg = new Uint8Array(WW).fill(1);   // grass/weeds along the surface; blasted away by explosions
-  caves = [];
+  caves = []; tunnels = [];
 }
 
 // ====================================================== atmosphere: clouds, rain, lightning, dust, mist, grass, grain
@@ -778,7 +779,7 @@ function fire() {
   for (let k = 0; k < w.shots; k++) {
     const a = (t.angle + (k - (w.shots - 1) / 2) * 7) * Math.PI / 180;
     shots.push({id: ++shotId, x: m.x, y: m.y, vx: Math.cos(a) * v, vy: -Math.sin(a) * v, w, owner: turn, trail: [],
-                bounces: w.kind === 'bounce' ? 3 : 0, split: w.kind === 'mirv'});
+                bounces: w.kind === 'bounce' ? 3 : 0, split: w.kind === 'mirv', bore: w.bore || 0});
   }
   emit({t: 'fire', i: turn});
   if (t.status) {   // a status effect only lasts for the afflicted tank's next shot
@@ -843,6 +844,12 @@ function applyEvent(e) {
     case 'pop': popup(e.x, e.y, e.s, e.c, e.z); break;
     case 'conf': confetti(e.x, e.y, e.n, e.sp); break;
     case 'sfx': sfx[e.n] && sfx[e.n](); break;
+    case 'drill': {   // drill biting into (or bursting out of) the ground
+      for (let i = 0; i < 26; i++) addP({type: 'dirt', x: e.x + rnd(-6, 6), y: e.y, vx: rnd(-2.5, 2.5), vy: -rnd(1, 4.5), g: .13, life: rnd(30, 60), size: rnd(2, 4), color: pick(theme.dirt)});
+      burst(e.x, e.y, 10, {type: 'spark', s0: 1.5, s1: 5, l0: 10, l1: 22, z0: 1, z1: 2, drag: .93, g: .1});
+      clearVeg(e.x, 10); noise(.7, .22, 2200, 300); tone(140, 70, .7, 'sawtooth', .05);
+      break;
+    }
     case 'cave': { const c = caves[e.i]; if (c && !c.falling) { c.falling = true; caveFx(c); } break; }
   }
 }
@@ -969,6 +976,45 @@ function drawCaves() {   // inside the terrain clip, so a cave never shows above
       ctx.fillStyle = 'rgba(60,48,34,.9)';
       for (let k = -3; k <= 3; k++) { const sx = c.x + k * c.w / 4.3 + 6, fl = cy + caveVoid(c, sx) / 2; ctx.beginPath(); ctx.ellipse(sx, fl - 2, 6 + hash01(k + c.w) * 6, 3.5, 0, Math.PI, TAU); ctx.fill(); }
     }
+  }
+}
+
+// ---- drill missile: on hitting the ground it bores on in a straight line (no gravity, no wind) for up to w.bore px
+// of earth. It blows up when it reaches a tank, breaks into a cavern (collapsing it) or its drill runs out; if it
+// breaks out of the far side of a hill it flies on as a normal shell. The tunnel it leaves is only a scar.
+const DRILL_SPEED = 5;
+let tunnels = [];
+function startDrill(s) {   // host
+  const sp = Math.hypot(s.vx, s.vy) || 1;
+  s.drilling = true; s.spd = sp; s.dx = s.vx / sp; s.dy = s.vy / sp;
+  s.vx = s.dx * DRILL_SPEED; s.vy = s.dy * DRILL_SPEED;   // (sent to clients so they can follow it underground)
+  tunnelPoint(s);
+  emit({t: 'drill', x: s.x, y: s.y});
+}
+function drillStep(s) {   // host: one frame underground
+  s.x += s.vx; s.y += s.vy; s.bore -= DRILL_SPEED; tunnelPoint(s);
+  s.trail.push([s.x, s.y]); if (s.trail.length > 36) s.trail.shift();
+  const inside = s.x >= 0 && s.x < WW;
+  const inCave = inside && caves.some(c => !c.falling && Math.abs(s.y - (c.top + c.h / 2)) < caveVoid(c, s.x) / 2);
+  const hitTank = tanks.some(t => t.hp > 0 && Math.hypot(s.x - t.x, s.y - (t.y - 8)) < 15);
+  if (!inside) { s.dead = true; return; }
+  if (inCave || hitTank || s.bore <= 0 || s.y >= WH - 3) { s.dead = true; explode(s.x, Math.min(s.y, WH - 3), s.w, s.owner); return; }
+  if (s.y < ground[Math.floor(s.x)]) {   // broke out into open air: fly on
+    s.drilling = false; s.vx = s.dx * s.spd * .85; s.vy = s.dy * s.spd * .85;
+    emit({t: 'drill', x: s.x, y: ground[Math.floor(s.x)], out: 1});
+  }
+}
+function tunnelPoint(s) {   // everyone: record the scar the drill leaves
+  if (!s.tun) { s.tun = []; tunnels.push(s.tun); if (tunnels.length > 30) tunnels.shift(); }
+  s.tun.push([s.x, s.y]);
+}
+function drawTunnels() {   // inside the terrain clip
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (const tn of tunnels) {
+    if (tn.length < 2) continue;
+    ctx.beginPath(); tn.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+    ctx.strokeStyle = 'rgba(10,8,5,.85)'; ctx.lineWidth = 10; ctx.stroke();
+    ctx.strokeStyle = 'rgba(90,70,45,.45)'; ctx.lineWidth = 3; ctx.stroke();
   }
 }
 
@@ -1201,8 +1247,10 @@ function updateGame() {
 
   if (state === 'fly') {
     for (const s of shots) {
+      if (s.drilling) { drillStep(s); continue; }
       s.vx += wind * WIND_SCALE; s.vy += G; s.x += s.vx; s.y += s.vy;
       s.trail.push([s.x, s.y]); if (s.trail.length > 36) s.trail.shift();
+      if (s.bore > 0 && s.x >= 0 && s.x < WW && s.y >= ground[Math.floor(s.x)]) { startDrill(s); continue; }   // drill: dig in instead of exploding
       if (T % 2 === 0) addP({type: 'smoke', x: s.x, y: s.y, vx: rnd(-.1, .1), vy: rnd(-.1, .1), life: 26, size: 2.5, drag: .98});
       if (s.split && s.vy > 0) {   // MIRV splits at the top of its arc
         s.dead = true;
@@ -1373,7 +1421,7 @@ function hostData(conn, d) {
   if (d.t === 'qk' && t && !t.ai && state === 'quick' && turn === c.seat && typeof d.k === 'string') qteKey(d.k.slice(0, 1).toLowerCase());
   if ((d.t === 'in' || d.t === 'fire') && t && !t.ai && state === 'aim' && turn === c.seat) {
     t.angle = clamp(+d.a || 0, 0, 180); t.power = clamp(+d.p || 0, 5, 100);
-    if (d.w >= 0 && d.w <= 2 && t.ammo[d.w | 0] > 0) t.weapon = d.w | 0;
+    if (d.w >= 0 && d.w < WEAPONS.length && t.ammo[d.w | 0] > 0) t.weapon = d.w | 0;
     const dx = clamp((+d.x) - t.x, -30, 30);
     if (dx && t.fuel > 0) {
       const nx = clamp(t.x + dx, 14, WW - 14), cost = Math.abs(nx - t.x) / 0.8 * 0.5;
@@ -1386,7 +1434,7 @@ function netBroadcast() {
   const m = {t: 's', st: state, tn: turn, w: wind, wn: winner, wt: winTeam, ws: wins,
     k: tanks.map(t => [r1(t.x), r1(t.y), Math.round(t.hp), r1(t.angle), r1(t.power), t.weapon, r1(t.fuel),
                        t.special ? ALLW.indexOf(t.special) : -1, t.ammo.map(a => a === Infinity ? -1 : a), t.status ? STATUSES.indexOf(t.status) : -1]),
-    sh: shots.map(s => [s.id, r1(s.x), r1(s.y), Math.round(s.vx * 1000) / 1000, Math.round(s.vy * 1000) / 1000, ALLW.indexOf(s.w)]),
+    sh: shots.map(s => [s.id, r1(s.x), r1(s.y), Math.round(s.vx * 1000) / 1000, Math.round(s.vy * 1000) / 1000, ALLW.indexOf(s.w), s.drilling ? 1 : 0]),
     wh: wheel ? [wheel.t, wheel.idx, wheel.spin] : null, tl: turnLeft,
     q: qte ? [qte.seq.join(''), qte.idx, qte.t, qte.limit, qte.done ? 1 : 0, qte.ok ? 1 : 0, qte.resT, qte.msg] : null};
   if (evq.length) { m.ev = evq; evq = []; }
@@ -1446,7 +1494,7 @@ function startClientRound(m) {
   tanks = m.ai.map((ai, i) => {
     const [model, color, team] = (m.lo && m.lo[i]) || [0, COLORS[i], i % 2], M = TANKS[model];
     return {i, x: 0, y: 0, tx: 0, ty: 0, ta: 55, tp: 55, init: false, model, team, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 55, power: 55,
-            weapon: 0, ammo: [Infinity, 3, 3], fuel: M.fuel, maxFuel: M.fuel, color, vy: 0, special: null, ai, tilt: 0, recoil: 0, dead: false};
+            weapon: 0, ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color, vy: 0, special: null, ai, tilt: 0, recoil: 0, dead: false};
   });
   shots = []; parts = []; rings = []; flashes = []; popups = []; wheel = null; winner = -1; winTeam = -1; banner = null; strikes = []; beams = []; uiParts = [];
   shake = 0; whiteFlash = 0; state = 'aim'; turn = 0; mode = 'play'; net.sent = false;
@@ -1477,7 +1525,7 @@ function applySnap(m) {
     seen.add(a[0]);
     let s = shots.find(q => q.id === a[0]);
     if (!s) { s = {id: a[0], trail: [], w: ALLW[a[5]]}; shots.push(s); }
-    s.x = a[1]; s.y = a[2]; s.vx = a[3]; s.vy = a[4];
+    s.x = a[1]; s.y = a[2]; s.vx = a[3]; s.vy = a[4]; s.drilling = !!a[6];
   }
   shots = shots.filter(s => seen.has(s.id));
   if (state === 'quick' && m.q) qte = {seq: m.q[0].split(''), idx: m.q[1], t: m.q[2], limit: m.q[3], done: !!m.q[4], ok: !!m.q[5], resT: m.q[6], msg: m.q[7]};
@@ -1498,9 +1546,11 @@ function updateClient() {
     tankCosmetics(t);
   }
   for (const s of shots) {
-    s.vx += wind * WIND_SCALE; s.vy += G; s.x += s.vx; s.y += s.vy;
+    if (!s.drilling) { s.vx += wind * WIND_SCALE; s.vy += G; }   // underground the drill goes straight
+    s.x += s.vx; s.y += s.vy;
+    if (s.drilling) tunnelPoint(s);
     s.trail.push([s.x, s.y]); if (s.trail.length > 36) s.trail.shift();
-    if (T % 2 === 0) addP({type: 'smoke', x: s.x, y: s.y, vx: rnd(-.1, .1), vy: rnd(-.1, .1), life: 26, size: 2.5, drag: .98});
+    if (T % 2 === 0 && !s.drilling) addP({type: 'smoke', x: s.x, y: s.y, vx: rnd(-.1, .1), vy: rnd(-.1, .1), life: 26, size: 2.5, drag: .98});
   }
   if (wheel && state === 'wheel') wheelTicks();
   if (qte && state === 'quick' && !qte.done) qte.t++;   // smooth the countdown between snapshots
@@ -1543,7 +1593,7 @@ function drawTerrain() {
     sg.addColorStop(0, 'rgba(0,0,0,.55)'); sg.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = sg; ctx.fillRect(s.x - s.r, s.y - s.r, s.r * 2, s.r * 2);
   }
-  drawCaves();
+  drawCaves(); drawTunnels();
   ctx.restore();
   const top = () => { ctx.beginPath(); for (let x = 0; x < WW; x++) x ? ctx.lineTo(x + .5, ground[x]) : ctx.moveTo(.5, ground[x]); };
   // grass only where nothing has blown it away (veg), bare dirt rim elsewhere
@@ -1934,7 +1984,7 @@ function drawControlPanel() {
   text(Math.round(t.angle) + '°', gx, gy - 20, 18, INK, 'center', '800');
   text('ANGLE', gx, y0 + 12, 10, 'rgba(255,255,255,.55)', 'center', '800');
   // power
-  const px = 240, pw = 310, st = t.status, eff = t.power * powerMult(t);
+  const px = 240, pw = 284, st = t.status, eff = t.power * powerMult(t);
   if (st) {   // status effect: this shot fires at half power — show the dial value AND what actually comes out
     text(`POWER ×½ — ${st.icon} ${st.name}`, px, y0 + 16, 11, st.color, 'left', '900');
     text(`${Math.round(t.power)} → ${Math.round(eff)}`, px + pw, y0 + 16, 18, st.color, 'right', '800');
@@ -1952,9 +2002,9 @@ function drawControlPanel() {
   rr(px + 40, y0 + 58, pw - 40, 8, 4); ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fill();
   if (t.fuel > 0) { rr(px + 40, y0 + 58, (pw - 40) * t.fuel / t.maxFuel, 8, 4); ctx.fillStyle = '#7fb3a0'; ctx.fill(); }
   // weapons
-  const sx = 572, sy = y0 + 12, sw2 = 80, sh = 60;
+  const sx = 540, sy = y0 + 12, sw2 = 70, sh = 60, step = 74;
   WEAPONS.forEach((wp, i) => {
-    const x2 = sx + i * 86, sel = t.weapon === i && !t.special, empty = t.ammo[i] <= 0;
+    const x2 = sx + i * step, sel = t.weapon === i && !t.special, empty = t.ammo[i] <= 0;
     ctx.save(); if (sel) glow(wp.color, 12);
     rr(x2, sy, sw2, sh, 10); ctx.fillStyle = sel ? 'rgba(255,255,255,.14)' : 'rgba(255,255,255,.05)'; ctx.fill();
     ctx.strokeStyle = sel ? wp.color : 'rgba(255,255,255,.14)'; ctx.lineWidth = sel ? 2 : 1; ctx.stroke(); ctx.restore();
@@ -1965,7 +2015,7 @@ function drawControlPanel() {
     text(wp.ammo === Infinity ? '∞' : '×' + t.ammo[i], x2 + sw2 - 8, sy + 10, 11, '#fff', 'right', '800');
     ctx.globalAlpha = 1;
   });
-  const x3 = sx + 262, sp = t.special;
+  const x3 = sx + WEAPONS.length * step + 2, sp = t.special;
   ctx.save(); if (sp) glow(sp.color, 14 + Math.sin(T * .15) * 5);
   rr(x3, sy, 96, sh, 10); ctx.fillStyle = sp ? sp.color + '33' : 'rgba(255,255,255,.03)'; ctx.fill();
   ctx.strokeStyle = sp ? sp.color : 'rgba(255,255,255,.12)'; ctx.lineWidth = sp ? 2 : 1; ctx.setLineDash(sp ? [] : [4, 4]); ctx.stroke(); ctx.restore();
@@ -1988,7 +2038,7 @@ function drawControlPanel() {
       t.angle = clamp(a < 0 ? (mx < gx ? 180 : 0) : a, 0, 180);
     }});
     uiButtons.push({x: px - 6, y: y0 + 22, w: pw + 12, h: 32, drag: mx => { t.power = clamp(Math.round((mx - px) / pw * 100), 5, 100); }});
-    WEAPONS.forEach((wp, i) => uiButtons.push({x: sx + i * 86, y: sy, w: sw2, h: sh, tap: () => { if (t.ammo[i] > 0) { t.weapon = i; sfx.click(); } }}));
+    WEAPONS.forEach((wp, i) => uiButtons.push({x: sx + i * step, y: sy, w: sw2, h: sh, tap: () => { if (t.ammo[i] > 0) { t.weapon = i; sfx.click(); } }}));
     uiButtons.push({x: fx, y: sy, w: 80, h: 60, tap: () => { if (state === 'aim') tryFire(); }});
   }
 }
@@ -1999,6 +2049,7 @@ const AMMO_INFO = {
   'Missile':  'Standard high-explosive round. Unlimited ammo — your everyday workhorse.',
   'Big Bomb': 'Heavy shell with a much bigger blast and crater. You get 3 per round.',
   'Triple':   'Fires three smaller shells in a spread, so one of them usually finds the target. 3 per round.',
+  'Drill':    'Bores straight through the earth instead of exploding on impact. Punch through a hill at a tank behind it, or drill into a cavern to collapse it. 2 per round.',
   'NUKE':     'An enormous blast that flattens everything nearby and whites out the screen.',
   'MIRV':     'Splits into five warheads at the top of its arc, blanketing a wide area.',
   'AIRSTRIKE':'Where it lands, six bombs fall from the sky in a line across the target.',
@@ -2029,7 +2080,7 @@ function drawInfoCard() {
   const x = 20, y = H + 98, w = W - 40, h = 48;
   panel(x, y, w, h, 10);
   // controls (two rows of key chips)
-  const rows = [[['← →', 'Aim'], ['↑ ↓', 'Power'], ['Shift', 'Fine'], ['A D', 'Drive'], ['1 2 3', 'Weapon'], ['Space', 'Fire']],
+  const rows = [[['← →', 'Aim'], ['↑ ↓', 'Power'], ['Shift', 'Fine'], ['A D', 'Drive'], ['1-4', 'Weapon'], ['Space', 'Fire']],
                 [['A S D F', 'Auth code'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
   rows.forEach((row, r) => {
     let cx = x + 12; const cy = y + 14 + r * 20;
@@ -2712,7 +2763,7 @@ addEventListener('keydown', e => {
   }
   if (state === 'aim' && !t.ai && isMine(t)) {
     if (k === ' ' && !e.repeat) tryFire();
-    const n = '123'.indexOf(k);
+    const n = '1234'.indexOf(k);
     if (n >= 0 && k.length === 1 && t.ammo[n] > 0) { t.weapon = n; sfx.click(); }
   }
 });
