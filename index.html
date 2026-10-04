@@ -133,7 +133,7 @@ let wind = 0, turn = 0, state = 'aim', wins = [0, 0, 0, 0], winner = -1;
 let theme = THEMES[0], bgCanvas, texCanvas, vigCanvas, clouds = [], stars = [], streaks = [], menuTanks = [];
 let numPlayers = 2, numHumans = 1, menuStage = 'home';
 let mode = 'menu', paused = false, assist = true, muted = false;
-const TURN_SECONDS = 45, QTE_FRAMES = 180;   // 3-second A-S-D-F key combo after a hit
+const TURN_SECONDS = 45, QTE_FRAMES = 180;   // 3-second combo after a hit: A, S, D, F in a random order
 let qte = null;
 const shuffled = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 let turnFrames = 0, turnLeft = 0;
@@ -1367,8 +1367,12 @@ function updateGame() {
   if (state === 'over' && T % 6 === 0 && winner >= 0) confetti(rnd(0, W), -10, 3, 2);
 }
 // ---- hit -> key combo -> prize wheel
+let lastCombo = '';
 function startQuick() {
-  qte = {seq: ['a', 's', 'd', 'f'], idx: 0, t: 0, limit: QTE_FRAMES + (net ? 12 : 0), done: false, ok: false, resT: 0, msg: '', ai: null};  // a little grace for network lag
+  let seq;   // A, S, D, F in a fresh random order every time: never plain "ASDF", never the same as last time
+  do seq = shuffled(['a', 's', 'd', 'f']); while (seq.join('') === 'asdf' || seq.join('') === lastCombo);
+  lastCombo = seq.join('');
+  qte = {seq, idx: 0, t: 0, limit: QTE_FRAMES + (net ? 12 : 0), done: false, ok: false, resT: 0, msg: '', ai: null};  // a little grace for network lag
   state = 'quick';
   emit({t: 'sfx', n: 'hit'});
 }

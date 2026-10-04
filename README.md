@@ -19,7 +19,7 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
   tank on top goes down with it (neighbouring caverns can chain-collapse)
 - No wind: shells fly on gravity alone. Four weapons: Missile, Big Bomb, Triple, and the **Drill** (2 per round), which bores straight
   through the earth to hit a tank behind a hill, burst out the far side, or break into a cavern and collapse it
-- Land a hit, then type A-S-D-F within 3 seconds to spin the supply-drop wheel for a one-shot special:
+- Land a hit, then type A, S, D, F in the random order shown, within 3 seconds, to spin the supply-drop wheel for a one-shot special:
   Nuke, MIRV, Dirt Bomb, Bouncer, Airstrike, Teleport, Vampire, **Orbital Strike** (satellite laser),
   and four status shells — **Incendiary, Cryo, EMP, Acid** — that leave the tanks they hit
   Burning / Frozen / Shorted / Corroded: **half power on their next shot**, then it wears off
@@ -45,7 +45,7 @@ The control panel and a controls + ammo card sit in a strip below the battlefiel
 | A D | Drive (limited fuel) |
 | 1 2 3 4 | Choose weapon |
 | Space | Fire |
-| A S D F | After a hit: press A, S, D, F in order within 3 s |
+| A S D F | After a hit: press the 4 keys shown (A, S, D, F in a random order) within 3 s |
 | T / M / P | Aim assist / sound / pause (offline only) |
 | Armory | ←/→ tank, ↑/↓ colour, Enter ready, Tab next player (hot-seat) — or click |
 | Esc | Menu / leave room |
