@@ -4,7 +4,10 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
 
 **Play:** https://buckbiggles.github.io/iron-rain/
 
-- 2–4 tanks, any mix of humans and CPU opponents, on a wide battlefield
+- 2–4 tanks, any mix of humans and CPU opponents, on a huge battlefield
+- **5 maps** (the host picks in the armory, ▲/▼ or N): Rolling Hills, Mountain Pass, The Gorge, Steppe, Badlands
+- Spawn points are random, except 1v1 and 2v2, which use fixed, tested positions
+- WWII skies: fighters dogfight and bombers drone over in the background
 - **Armory:** before the battle every player picks one of 8 tanks (Warhound, Bulwark, Jackal, Mammoth, Viper,
   Rhino, Scorpion, Kodiak — each trading armor against mobility) and a colour, then hits READY. CPUs pick at random.
 - **Online multiplayer:** host a room, share the invite link or 5-letter code, friends join from their own browsers

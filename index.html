@@ -11,19 +11,20 @@
 </style>
 </head>
 <body>
-<canvas id="c" width="1680" height="1173"></canvas>
+<canvas id="c" width="2240" height="1564"></canvas>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
-// The battlefield ("world") is 1.5x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
-// code works in interface units and is drawn through a 1.5x transform. Result: a bigger map with tanks farther apart,
+// The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
+// code works in interface units and is drawn through a 2x transform. Result: a big map with tanks far apart,
 // while the interface stays the same size on screen.
 const W = 1120, H = 630, TAU = Math.PI * 2;          // interface units
-const WW = cv.width, WH = 945, S = WW / W;          // world units (1680 x 945)
+const WW = cv.width, WH = 1260, S = WW / W;         // world units (2240 x 1260)
+const K = WW / 1680;                                // growth over the original 1680-wide map: terrain, range and sky scale by this
 const HUD_H = 152, UH = H + HUD_H;                  // the control strip sits BELOW the battlefield (interface y 630..782)
-const G = 0.12, POWER_SCALE = 0.13, WIND_SCALE = 0.004;
-const GROUND_MIN = 300, GROUND_MAX = WH - 240;
+const G = 0.12, POWER_SCALE = 0.13 * Math.sqrt(K), WIND_SCALE = 0.004;   // range grows with K so shells still cross the map
+const GROUND_MIN = 300 * K, GROUND_MAX = WH - 240 * K;
 const MAX_HP = 200;
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -216,16 +217,42 @@ function hazard(x, y, w, h, alpha = 1) {
 }
 
 // ====================================================== scene generation
-function makeTerrain() {
+// ---- maps: the host (or local player) picks one in the armory. Each gen() returns a height function y(x) in world px;
+// the result is clamped and then slumped to the sand's angle of repose, so cliffs become steep slopes.
+function waveSum(n, amp, freq) {   // a few random sine waves: the basic rolling ground
+  const ws = [];
+  for (let i = 0; i < n; i++) ws.push({a: rnd(25, 75) * amp * K / (i + 1), f: rnd(0.004, 0.012) * freq * (i + 1) / K, p: rnd(0, TAU)});
+  return x => ws.reduce((y, w) => y + Math.sin(x * w.f + w.p) * w.a, 0);
+}
+const bump = (x, cx, w) => Math.exp(-(((x - cx) / w) ** 2));   // a smooth hill of width w centred on cx
+const MAPS = [
+  {name: 'ROLLING HILLS', desc: 'Gentle hills. A fair fight.',
+   gen: () => { const h = waveSum(4, 1.3, .8); return x => WH * .55 + h(x); }},
+  {name: 'MOUNTAIN PASS', desc: 'A huge ridge. Lob it over.',
+   gen: () => { const h = waveSum(3, .45, 1), c = WW * rnd(.46, .54), w = WW * rnd(.1, .13);
+                return x => WH * .7 + h(x) - 330 * K * bump(x, c, w) - 90 * K * bump(x, c + w * 1.6, w * .6) - 70 * K * bump(x, c - w * 1.7, w * .5); }},
+  {name: 'THE GORGE', desc: 'Plateaus over a deep canyon.',
+   gen: () => { const h = waveSum(3, .35, 1.2), c = WW * rnd(.46, .54), w = WW * rnd(.07, .09);
+                return x => WH * .47 + h(x) + 360 * K * bump(x, c, w) + 40 * K * bump(x, c, w * 2.6); }},
+  {name: 'STEPPE', desc: 'Nearly flat. Nowhere to hide.',
+   gen: () => { const h = waveSum(3, .22, .7), b = Array.from({length: 3}, () => [WW * rnd(.1, .9), rnd(-30, 40) * K]);
+                return x => WH * .63 + h(x) - b.reduce((s, [cx, a]) => s + a * bump(x, cx, 60 * K), 0); }},
+  {name: 'BADLANDS', desc: 'Mesas and sheer drops.',
+   gen: () => { const h = waveSum(2, .3, 1), mesas = [];
+                for (let x = WW * rnd(.04, .1); x < WW * .95;) { const mw = rnd(150, 300) * K; mesas.push([x, x + mw, rnd(110, 250) * K]); x += mw + rnd(140, 300) * K; }
+                return x => { let y = WH * .7 + h(x); for (const [a, b, ht] of mesas) if (x >= a && x <= b) y -= ht; return y; }; }},
+];
+let mapIdx = 0;
+function makeTerrain(mi = mapIdx) {
   ground = new Float32Array(WW);
-  const waves = [];
-  for (let i = 0; i < 4; i++) waves.push({a: rnd(25, 75) * 1.3 / (i + 1), f: rnd(0.004, 0.012) * .8 * (i + 1), p: rnd(0, TAU)});   // wider map: more hills, same steepness
-  for (let x = 0; x < WW; x++) {
-    let y = WH * 0.55;
-    for (const w of waves) y += Math.sin(x * w.f + w.p) * w.a;
-    ground[x] = clamp(y, GROUND_MIN, GROUND_MAX);
-  }
+  const f = MAPS[mi].gen();
+  for (let x = 0; x < WW; x++) ground[x] = clamp(f(x), GROUND_MIN, GROUND_MAX);
   for (let i = 0; i < 4000 && sandStep(false) > 0.005; i++);   // start in equilibrium so only disturbed sand moves
+}
+const mapPreviews = [];   // little terrain silhouettes for the armory's map picker
+function mapPreview(mi) {
+  if (!mapPreviews[mi]) { const f = MAPS[mi].gen(); mapPreviews[mi] = Array.from({length: 61}, (_, k) => clamp(f(WW * k / 60), GROUND_MIN, GROUND_MAX) / WH); }
+  return mapPreviews[mi];
 }
 
 // ---- sand: the ground is loose granular material. Wherever two neighbouring columns differ by more than the angle of
@@ -330,17 +357,17 @@ function renderTex() {
   return c;
 }
 
-function makeScene(forceTheme, gdata) {
+function makeScene(forceTheme, gdata, mi) {
   themeIdx = forceTheme != null ? forceTheme : Math.floor(Math.random() * THEMES.length);
   theme = THEMES[themeIdx];
-  if (gdata) ground = Float32Array.from(gdata, v => v / 10); else makeTerrain();   // wire format is tenths of a pixel
+  if (gdata) ground = Float32Array.from(gdata, v => v / 10); else makeTerrain(mi);   // wire format is tenths of a pixel
   bgCanvas = renderBG();
   if (!texCanvas) texCanvas = renderTex();
   scorches = [];
   cloudSprites = [[420, 150], [320, 120], [520, 170], [260, 100], [380, 140]].map(([w, h]) => makeCloudSprite(w, h, theme.cloud));
   clouds = Array.from({length: 13}, (_, k) => {   // three parallax layers: far (small, faint, slow) to near
     const layer = k % 3;
-    return {x: rnd(-200, WW), y: rnd(30, 300) * (1 - layer * .15), s: (.55 + layer * .3) * rnd(.8, 1.25), v: (.04 + layer * .07) * rnd(.7, 1.3), layer, spr: k % 5};
+    return {x: rnd(-200, WW), y: rnd(30, 300) * K * (1 - layer * .15), s: (.55 + layer * .3) * rnd(.8, 1.25) * K, v: (.04 + layer * .07) * rnd(.7, 1.3), layer, spr: k % 5};
   }).sort((a, b) => a.layer - b.layer);
   stars = Array.from({length: theme.stars}, () => ({x: rnd(0, WW), y: rnd(0, WH * .55), r: rnd(.5, 1.7), ph: rnd(0, 9)}));
   streaks = Array.from({length: 70}, () => ({x: rnd(0, WW), y: rnd(120, WH - 240), l: rnd(14, 34), s: rnd(.6, 1.4)}));
@@ -403,16 +430,16 @@ function updateWeather() {
 let planes = [], tracers = [], skyFx = [], nextWave = 60, nextBombers = 900;
 const SKY_TOP = 40, SKY_BOT = () => WH * .42;
 function spawnFighter(side, fromLeft) {
-  const y = rnd(SKY_TOP + 30, SKY_BOT() - 30), sp = rnd(3.1, 3.7);
+  const y = rnd(SKY_TOP + 30, SKY_BOT() - 30), sp = rnd(3.1, 3.7) * K;
   planes.push({kind: 'fighter', side, x: fromLeft ? rnd(-260, -60) : WW + rnd(60, 260), y, ang: fromLeft ? rnd(-.2, .2) : Math.PI + rnd(-.2, .2),
-               sp, s: rnd(1.3, 1.6), hp: 20 + Math.floor(Math.random() * 14), down: false, cool: rnd(30, 90), burst: 0, wob: rnd(0, 9), smoke: 0, brk: 0, bdir: 1});
+               sp, s: rnd(1.3, 1.6) * K, hp: 20 + Math.floor(Math.random() * 14), down: false, cool: rnd(30, 90), burst: 0, wob: rnd(0, 9), smoke: 0, brk: 0, bdir: 1});
 }
 function spawnBombers() {
   const fromLeft = Math.random() < .5, n = 3 + Math.floor(Math.random() * 3), y0 = rnd(SKY_TOP + 10, SKY_TOP + 70), side = Math.random() < .5 ? 0 : 1;
   for (let k = 0; k < n; k++) {
     const row = Math.floor((k + 1) / 2), off = k % 2 ? 1 : -1;   // a V (vic) formation
     planes.push({kind: 'bomber', side, x: (fromLeft ? -120 : WW + 120) - (fromLeft ? 1 : -1) * row * 100, y: y0 + off * row * 26,
-                 ang: fromLeft ? 0 : Math.PI, sp: 1.25, s: 1.15, hp: 99, down: false, cool: 0, wob: rnd(0, 9), smoke: 0});
+                 ang: fromLeft ? 0 : Math.PI, sp: 1.25 * K, s: 1.15 * K, hp: 99, down: false, cool: 0, wob: rnd(0, 9), smoke: 0});
   }
   droneSfx(14);
 }
@@ -458,11 +485,11 @@ function updateSky() {
     let tail = false;   // an enemy sitting on my tail? break hard, and reverse the break now and then (a scissors)
     for (const q of planes) if (q.kind === 'fighter' && !q.down && q.side !== p.side) {
       const dx = p.x - q.x, dy = p.y - q.y, d = Math.hypot(dx, dy);
-      if (d < 230 && Math.cos(Math.atan2(dy, dx) - q.ang) > .8 && Math.cos(Math.atan2(-dy, -dx) - p.ang) < 0) tail = true;
+      if (d < 230 * K && Math.cos(Math.atan2(dy, dx) - q.ang) > .8 && Math.cos(Math.atan2(-dy, -dx) - p.ang) < 0) tail = true;
     }
     if (!(--p.brk > 0)) { p.brk = Math.floor(rnd(50, 110)); p.bdir = Math.random() < .5 ? 1 : -1; }
     if (tail) want = p.ang + p.bdir * 1.4;
-    if (tgt && best < 110 && !tail) p.sp -= .06;   // overshooting: throttle back
+    if (tgt && best < 110 * K && !tail) p.sp -= .06;   // overshooting: throttle back
     const onScreen = p.x > -40 && p.x < WW + 40;
     if (p.y < SKY_TOP) want = Math.abs(Math.cos(p.ang)) > .2 ? (Math.cos(p.ang) > 0 ? .5 : Math.PI - .5) : Math.PI / 2;
     if (p.y > SKY_BOT()) want = Math.cos(p.ang) > 0 ? -.5 : Math.PI + .5;
@@ -472,15 +499,15 @@ function updateSky() {
     let da = Math.atan2(Math.sin(want - p.ang), Math.cos(want - p.ang));
     const tr = tail ? .065 : .045; p.ang += clamp(da, -tr, tr);
     const climb = Math.sin(p.ang);                       // planes slow down climbing and speed up diving
-    p.sp = clamp(p.sp - climb * .02 + (3.4 - p.sp) * .01, 2.4, 4.6);
+    p.sp = clamp(p.sp - climb * .02 + (3.4 * K - p.sp) * .01, 2.4 * K, 4.6 * K);
     p.x += Math.cos(p.ang) * p.sp; p.y += Math.sin(p.ang) * p.sp;
-    if (tgt && --p.cool <= 0 && best < 420 && onScreen) {
+    if (tgt && --p.cool <= 0 && best < 420 * K && onScreen) {
       const aim = Math.atan2(tgt.y - p.y, tgt.x - p.x);
       if (Math.abs(Math.atan2(Math.sin(aim - p.ang), Math.cos(aim - p.ang))) < .2) { p.burst = 14; p.cool = rnd(50, 110); if (Math.random() < .6) mgSfx(); }
     }
     if (p.burst > 0 && p.burst-- % 2 === 0) {   // tracer rounds
       const a = p.ang + rnd(-.04, .04), nose = 16 * p.s;
-      tracers.push({x: p.x + Math.cos(p.ang) * nose, y: p.y + Math.sin(p.ang) * nose, vx: Math.cos(a) * 17 + Math.cos(p.ang) * p.sp, vy: Math.sin(a) * 17 + Math.sin(p.ang) * p.sp, life: 26, side: p.side});
+      tracers.push({x: p.x + Math.cos(p.ang) * nose, y: p.y + Math.sin(p.ang) * nose, vx: Math.cos(a) * 17 * K + Math.cos(p.ang) * p.sp, vy: Math.sin(a) * 17 * K + Math.sin(p.ang) * p.sp, life: 26, side: p.side});
     }
     if (p.smoke > 0 && T % 3 === 0) skyFx.push({t: 'smoke', x: p.x, y: p.y, r: 3 * p.s, life: 60, max: 60, dark: .5});
   }
@@ -604,21 +631,23 @@ function tiltAt(x) {
   const i0 = clamp(Math.floor(x - 11), 0, WW - 1), i1 = clamp(Math.floor(x + 11), 0, WW - 1);
   return Math.atan2(ground[i1] - ground[i0], Math.max(1, i1 - i0));
 }
-// ---- spawn points. Layouts are fractions of the map width, left to right (teams: Alpha's slots first, on the left).
+// ---- spawn points: fractions of the map width, left to right (teams: Alpha's slots first, on the left).
 // Each tank then takes the flattest nearby spot (no cliffs or pits) and the ground is levelled into a pad under it.
-// Chosen from CPU-vs-CPU simulations (win rate per slot, reachability across winds, pace, friendly fire):
-//   FFA 2: 25/75% keeps the enemy in range in every wind.  FFA 4: inner pair pushed apart so each inner tank's
-//   nearest threat is its outer neighbour (best inner-seat win share).  2v2: fastest, least friendly fire.
-//   3v1: farthest solo position (3v1 is unwinnable for the solo whatever the spawn).  3-tank layouts not tuned yet.
-const SPAWNS = {ffa: {2: [.25, .75], 3: [.15, .5, .85], 4: [.08, .28, .72, .92]},
-                teams: {'2v1': [.12, .3, .82], '2v2': [.14, .34, .66, .86], '3v1': [.05, .19, .33, .93]}};
-function spawnLayout() {
-  if (!teamMode || !loadout) return SPAWNS.ffa[numPlayers];
-  const a = loadout.filter(p => p.team === 0).length, b = numPlayers - a;
-  const base = SPAWNS.teams[a >= b ? `${a}v${b}` : `${b}v${a}`] || SPAWNS.ffa[numPlayers];
-  return a >= b ? base : base.map(f => 1 - f).reverse();   // smaller Alpha: mirror so Alpha still starts on the left
+// 1v1 and 2v2 use fixed, simulation-tested layouts; every other line-up gets random spots, spaced apart.
+const SPAWNS = {ffa: {2: [.25, .75]}, teams: {'2v2': [.14, .34, .66, .86]}};
+function randomSpawns(n, gap = .15) {
+  for (let tries = 0; tries < 500; tries++) {
+    const xs = Array.from({length: n}, () => rnd(.1, .9)).sort((a, b) => a - b);
+    if (xs.every((x, i) => !i || x - xs[i - 1] >= gap)) return xs;
+  }
+  return Array.from({length: n}, (_, i) => .1 + .8 * i / (n - 1));
 }
-function placeSpawn(fx, reach = 70, lift = 0) {
+function spawnLayout() {
+  if (!teamMode || !loadout) return SPAWNS.ffa[numPlayers] || randomSpawns(numPlayers);
+  const a = loadout.filter(p => p.team === 0).length, b = numPlayers - a;
+  return SPAWNS.teams[`${a}v${b}`] || randomSpawns(numPlayers);   // sorted left to right, so Alpha still deploys on the left
+}
+function placeSpawn(fx, reach = 70 * K, lift = 0) {
   const cx = fx * WW, g = i => ground[clamp(Math.round(i), 0, WW - 1)];
   let best = cx, bestScore = Infinity;
   for (let x = Math.max(40, cx - reach); x <= Math.min(WW - 40, cx + reach); x += 3) {
@@ -648,7 +677,7 @@ function startRound() {
   // teams deploy side by side: Alpha on the left, Bravo on the right
   const order = shuffled(Array.from({length: numPlayers}, (_, i) => i));   // rotate who gets which spawn every round
   if (teamMode && loadout) order.sort((a, b) => loadout[a].team - loadout[b].team);   // Alpha left, Bravo right; random within each team
-  const xs = spawnLayout().map(s => typeof s === 'number' ? placeSpawn(s) : placeSpawn(s.f, 70, s.lift || 0));
+  const xs = spawnLayout().map(s => typeof s === 'number' ? placeSpawn(s) : placeSpawn(s.f, 70 * K, s.lift || 0));
   for (let k = 0; k < 300 && sandStep(false) > .01; k++);   // let the sand settle around the new pads
   tanks = Array.from({length: numPlayers}, (_, i) => newTank(i, xs[order.indexOf(i)]));
   shots = []; parts = []; rings = []; flashes = []; popups = []; pending = []; wheel = null; winner = -1; winTeam = -1; evq = [];
@@ -722,7 +751,7 @@ function updateFx() {
   for (const p of popups) { p.y -= .7; p.life--; } popups = popups.filter(p => p.life > 0);
   shake *= .9; if (shake < .15) shake = 0; whiteFlash *= .9;
   const wv = mode === 'menu' ? 3 : wind;
-  for (const c of clouds) { c.x += c.v + wv * .03 * (.5 + c.layer * .4); if (c.x > WW + 80) c.x = -680; if (c.x < -680) c.x = WW + 80; }
+  for (const c of clouds) { c.x += c.v + wv * .03 * (.5 + c.layer * .4); if (c.x > WW + 80) c.x = -680 * K; if (c.x < -680 * K) c.x = WW + 80; }
   updateWeather(); updateSky();
   for (const s of streaks) { s.x += wv * .55 * s.s; if (s.x > WW + 40) s.x = -40; if (s.x < -40) s.x = WW + 40; }
   if (banner && ++banner.t > 110) banner = null;
@@ -1326,7 +1355,7 @@ function clientData(m) {
     case 'full': fail2(m.why); break;
     case 'lobby': net.occ = m.occ; numPlayers = m.np; break;
     case 'round': startClientRound(m); break;
-    case 'arm': loadout = m.p; armoryGo = m.go || 0; teamMode = !!m.tm; if (mode !== 'armory') { mode = 'armory'; menuButtons = []; } break;
+    case 'arm': loadout = m.p; armoryGo = m.go || 0; teamMode = !!m.tm; if (Number.isInteger(m.mp) && MAPS[m.mp]) mapIdx = m.mp; if (mode !== 'armory') { mode = 'armory'; menuButtons = []; } break;
     case 's': applySnap(m); break;
   }
 }
@@ -1664,7 +1693,7 @@ function drawParts() {
   for (const p of popups) {
     const t = p.life / p.max;
     ctx.globalAlpha = Math.min(1, t * 2.2);
-    text(p.s, p.x, p.y, p.size * (1 + (1 - t) * .15), p.color, 'center', '900', 'rgba(0,0,0,.75)');
+    text(p.s, p.x, p.y, p.size * K * (1 + (1 - t) * .15), p.color, 'center', '900', 'rgba(0,0,0,.75)');
   }
   ctx.globalAlpha = 1;
 }
@@ -2194,7 +2223,32 @@ function cycleColor(i, dir) {
   for (let n = 0; n < PALETTE.length; n++) { k = (k + dir + PALETTE.length) % PALETTE.length; if (!taken.includes(PALETTE[k])) return PALETTE[k]; }
   return p.color;
 }
-function bcastArmory() { bcast({t: 'arm', p: loadout, go: armoryGo, tm: teamMode}); }
+function bcastArmory() { bcast({t: 'arm', p: loadout, go: armoryGo, tm: teamMode, mp: mapIdx}); }
+function setMap(i) {             // local player or online host only
+  if (net && net.role !== 'host') return;
+  mapIdx = ((i % MAPS.length) + MAPS.length) % MAPS.length; sfx.click();
+  if (net) bcastArmory();
+}
+function drawMapPicker(canSet) {  // top-left of the armory: map name, a terrain silhouette, and (host) arrows to change it
+  const x = 18, y = 14, w = 300, h = 62, M = MAPS[mapIdx], pv = mapPreview(mapIdx);
+  let any = false;
+  panel(x, y, w, h, 10);
+  text('MAP', x + 12, y + 14, 10, INK_DIM, 'left', '800');
+  text(M.name, x + 12, y + 32, 16, INK, 'left', '900');
+  text(M.desc, x + 12, y + 50, 9.5, INK_DIM, 'left', '700');
+  const px = x + 196, pw = 64, py = y + 10, ph = 42;   // silhouette
+  rr(px, py, pw, ph, 4); ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fill();
+  ctx.save(); rr(px, py, pw, ph, 4); ctx.clip();
+  ctx.beginPath(); ctx.moveTo(px, py + ph);
+  pv.forEach((v, k) => ctx.lineTo(px + pw * k / 60, py + ph * (v - .28) / .5));
+  ctx.lineTo(px + pw, py + ph); ctx.closePath(); ctx.fillStyle = '#b89a5e'; ctx.fill(); ctx.restore();
+  if (canSet) {
+    if (smallBtn(x + 264, y + 8, 28, 22, '▲', '#d4a417', () => setMap(mapIdx - 1), false)) any = true;
+    if (smallBtn(x + 264, y + 33, 28, 22, '▼', '#d4a417', () => setMap(mapIdx + 1), false)) any = true;
+  }
+  text(`${mapIdx + 1}/${MAPS.length}`, px + pw - 3, py + ph - 6, 8.5, 'rgba(255,255,255,.7)', 'right', '800');
+  return any;
+}
 function armoryTick() {          // host / local: launch once every unit is ready
   if (net && net.role === 'client') return;
   if (loadout.every(p => p.ready) && teamsValid()) { if (++armoryGo === 1) sfx.prize(); if (armoryGo > 50) { armoryGo = 0; startRound(); return; } }
@@ -2205,12 +2259,12 @@ function armoryTick() {          // host / local: launch once every unit is read
 function drawArmory() {
   menuButtons = [];
   ctx.fillStyle = 'rgba(14,10,4,.38)'; ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = '#a3271c'; ctx.fillRect(W / 2 - 300, 18, 600, 4); ctx.fillStyle = 'rgba(233,220,180,.6)'; ctx.fillRect(W / 2 - 300, 24, 600, 1);
+  ctx.fillStyle = '#a3271c'; ctx.fillRect(W / 2 - 200, 18, 400, 4); ctx.fillStyle = 'rgba(233,220,180,.6)'; ctx.fillRect(W / 2 - 200, 24, 400, 1);
   text('ARMORY — SELECT YOUR TANK', W / 2, 46, 30, INK, 'center', '900', 'rgba(0,0,0,.6)');
   text(teamMode ? 'Pick a tank, a colour and a side, then hit READY. CPU units fill the smaller team.'
                 : 'Pick a tank and a colour, then hit READY. CPU units are assigned at random.', W / 2, 72, 13, INK_DIM, 'center', '700');
   const n = loadout.length, gap = 14, pw = Math.min(255, (W - 60 - gap * (n - 1)) / n), x0 = (W - (pw * n + gap * (n - 1))) / 2, py = 92, ph = 468;
-  let any = false;
+  let any = drawMapPicker(!net || net.role === 'host');
   if (n >= 3) {   // game mode switch: Free-for-all / Teams (local player or online host decides)
     const canSet = !net || net.role === 'host', mx = W - 252, my = 30;
     text('MODE', mx - 8, my + 15, 10, INK_DIM, 'right', '800');
@@ -2282,7 +2336,7 @@ function drawArmory() {
   const all = loadout.every(p => p.ready);
   if (all && !teamsValid()) text('⚠ BOTH TEAMS NEED AT LEAST ONE TANK — someone switch sides', W / 2, 586, 15, '#fca5a5', 'center', '900', 'rgba(0,0,0,.6)');
   else if (all) { ctx.save(); glow('#9cc255', 20); panel(W / 2 - 200, 566, 400, 40, 12, '#9cc255', 2); noGlow(); ctx.restore(); text('ALL UNITS READY — DEPLOYING…', W / 2, 587, 17, '#9cc255', 'center', '900'); }
-  else text('←/→ tank  ·  ↑/↓ colour' + (teamMode ? '  ·  T team' : '') + (n >= 3 && (!net || net.role === 'host') ? '  ·  G mode' : '') +
+  else text('←/→ tank  ·  ↑/↓ colour' + (teamMode ? '  ·  T team' : '') + (!net || net.role === 'host' ? '  ·  N map' + (n >= 3 ? '  ·  G mode' : '') : '') +
             '  ·  Enter ready' + (net ? '  ·  Esc leave' : '  ·  Tab next player  ·  Esc back'), W / 2, 586, 13, INK_DIM, 'center', '700', 'rgba(0,0,0,.6)');
   cv.style.cursor = any ? 'pointer' : 'default';
   drawUIParts();
@@ -2508,7 +2562,7 @@ function drawOffscreenShells() {
 }
 
 function initMenuScene() {
-  numPlayers = 4; makeScene(); menuShells = []; nextMenuShot = 60;
+  numPlayers = 4; makeScene(null, null, Math.floor(Math.random() * MAPS.length)); menuShells = []; nextMenuShot = 60;
   menuTanks = [0, 1, 2, 3].map(i => { const t = newTank(i); t.model = Math.floor(Math.random() * TANKS.length); t.x = (130 + i * 285 + rnd(-30, 30)) * S; t.y = ground[Math.floor(t.x)] - 4; t.tilt = tiltAt(t.x); return t; });
   numPlayers = 2;
 }
@@ -2535,6 +2589,7 @@ addEventListener('keydown', e => {
       armoryFocus = hum[(hum.indexOf(armoryFocus) + 1) % hum.length]; return;
     }
     if (k === 'g' && loadout.length >= 3) { setTeamMode(!teamMode); return; }   // game mode (local player / host)
+    if (k === 'n') { setMap(mapIdx + (e.shiftKey ? -1 : 1)); return; }           // map (local player / host)
     const i = net ? net.seat : armoryFocus;
     if (!canEditSeat(i)) return;
     const p = loadout[i];
