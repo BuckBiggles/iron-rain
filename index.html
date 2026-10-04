@@ -2517,8 +2517,13 @@ function drawArmory() {
   else if (all) { ctx.save(); glow('#9cc255', 20); panel(W / 2 - 200, 566, 400, 40, 12, '#9cc255', 2); noGlow(); ctx.restore(); text('ALL UNITS READY — DEPLOYING…', W / 2, 587, 17, '#9cc255', 'center', '900'); }
   else text('←/→ tank  ·  ↑/↓ colour' + (teamMode ? '  ·  T team' : '') + (!net || net.role === 'host' ? '  ·  N map' + (n >= 3 ? '  ·  G mode' : '') : '') +
             '  ·  Enter ready' + (net ? '  ·  Esc leave' : '  ·  Tab next player  ·  Esc back'), W / 2, 586, 13, INK_DIM, 'center', '700', 'rgba(0,0,0,.6)');
+  if (smallBtn(16, 568, 150, 36, net ? (net.role === 'host' ? '◀ CLOSE ROOM' : '◀ LEAVE') : '◀ BACK', '#c0583d', armoryBack, false)) any = true;
   cv.style.cursor = any ? 'pointer' : 'default';
   drawUIParts();
+}
+function armoryBack() {   // same as Esc in the armory
+  sfx.click();
+  if (net) leaveRoom(); else { mode = 'menu'; menuStage = 'humans'; loadout = null; }
 }
 function copyInvite() {
   const link = inviteLink();
@@ -2639,8 +2644,15 @@ function drawMenu() {
   ctx.fillStyle = 'rgba(14,10,4,.28)'; ctx.fillRect(0, 0, W, H);
   if (!titleCanvas) renderTitle();
   drawPosterHeader();
+  // a back button in the same place on every screen past the first (Esc / Backspace do the same)
+  const toHome = () => { menuStage = 'home'; netMsg = ''; sfx.click(); };
+  const back = {count: ['◀ BACK', toHome], hostcount: ['◀ BACK', toHome], join: ['◀ BACK', toHome],
+                humans: ['◀ BACK', () => { menuStage = 'count'; sfx.click(); }],
+                connecting: ['◀ CANCEL', () => leaveRoom()],
+                lobby: [net && net.role === 'host' ? '◀ CLOSE ROOM' : '◀ LEAVE', () => leaveRoom()]}[menuStage];
+  const backHov = back ? button(20, 14, 180, 40, back[0], '', null, '#c0583d', back[1]) : false;
 
-  if (['join', 'connecting', 'lobby'].includes(menuStage)) { drawOnlineMenus(); return; }
+  if (['join', 'connecting', 'lobby'].includes(menuStage)) { drawOnlineMenus(); if (backHov) cv.style.cursor = 'pointer'; return; }
   let any = false;
   if (menuStage === 'home') {
     text('SELECT DEPLOYMENT', W / 2, 198, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
@@ -2654,7 +2666,6 @@ function drawMenu() {
     const online = menuStage === 'hostcount';
     text(online ? 'HOW MANY TANKS IN THE ROOM?  (friends take the open seats, CPUs fill the rest)' : 'SELECT FORCE SIZE', W / 2, 198, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
     [2, 3, 4].forEach((n, i) => { if (button(W / 2 - 300 + i * 205, 218, 190, 96, n + '', n + ' TANKS', n, COLORS[i + 1], () => online ? (sfx.click(), hostRoom(n)) : pickCount(n))) any = true; });
-    if (button(W / 2 - 60, 326, 120, 34, '◀', '', 'Esc', '#fff', () => { menuStage = 'home'; sfx.click(); })) any = true;
     if (netMsg) text(netMsg, W / 2, 384, 14, '#fca5a5', 'center', '800', 'rgba(0,0,0,.6)');
   } else {
     text(`${numPlayers} TANKS — HOW MANY HUMANS?`, W / 2, 198, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
@@ -2663,9 +2674,8 @@ function drawMenu() {
       const sub = n === 0 ? 'WATCH CPUs' : n === numPlayers ? 'ALL HUMAN' : (numPlayers - n) + ' CPU';
       if (button(x0 + i * (bw + gap), 218, bw, 96, n + '', sub, n, COLORS[i % 4], () => pickHumans(n))) any = true;
     });
-    if (button(W / 2 - 60, 326, 120, 34, '◀', '', 'Esc', '#fff', () => { menuStage = 'count'; sfx.click(); })) any = true;
   }
-  cv.style.cursor = any ? 'pointer' : 'default';
+  cv.style.cursor = any || backHov ? 'pointer' : 'default';
 
   // the briefing documents: a typed field manual and the supply manifest, taped down on the table
   paper(60, 392, 470, 204, 3);
