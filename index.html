@@ -68,7 +68,9 @@ let wind = 0, turn = 0, state = 'aim', wins = [0, 0, 0, 0], winner = -1;
 let theme = THEMES[0], bgCanvas, texCanvas, clouds = [], stars = [], streaks = [], menuTanks = [];
 let numPlayers = 2, numHumans = 1, menuStage = 'home';
 let mode = 'menu', paused = false, assist = true, muted = false;
-const TURN_SECONDS = 45;
+const TURN_SECONDS = 45, QTE_FRAMES = 120;   // 2-second key combo after a hit
+let qte = null;
+const shuffled = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 let turnFrames = 0, turnLeft = 0;
 let net = null, netMsg = '', codeInput = '', evq = [], terrainDirty = false, themeIdx = 0, shotId = 0, copiedAt = -999;
 let shake = 0, whiteFlash = 0, T = 0, aiTimer = 0, aiPlan = null;
@@ -106,6 +108,7 @@ const sfx = {
   win:    () => [523, 659, 784, 1047].forEach((f, i) => tone(f, f, .25, 'triangle', .16, i * .1)),
   prize:  () => [784, 988, 1175, 1568].forEach((f, i) => tone(f, f, .3, 'square', .08, i * .08)),
   click:  () => tone(500, 650, .06, 'square', .06),
+  fail:   () => { tone(220, 70, .35, 'sawtooth', .12); },
 };
 
 // ====================================================== helpers (drawing)
@@ -518,6 +521,16 @@ function updateGame() {
     if (!shots.length) { state = 'settle'; aiTimer = 45; }
   }
 
+  if (state === 'quick' && qte) {
+    const q = qte;
+    if (!q.done) {
+      q.t++;
+      if (tanks[turn].ai && !q.ai) q.ai = {next: 30, failAt: Math.random() < .75 ? -1 : Math.floor(rnd(1, 4))};   // CPU nails it ~75% of the time
+      if (q.ai && --q.ai.next <= 0) { qteKey(q.idx === q.ai.failAt ? 'x' : q.seq[q.idx]); q.ai.next = Math.floor(rnd(16, 28)); }
+      if (!q.done && q.t > q.limit) qteEnd(false, 'TOO SLOW!');
+    } else if (++q.resT > 55) { qte = null; if (q.ok) startWheel(); else beginTurn(nextAlive(turn)); }
+  }
+
   if (state === 'wheel') {
     wheelTicks();
     if (wheel.t === wheel.spin) {
@@ -537,12 +550,33 @@ function updateGame() {
         if (winner >= 0) { wins[winner]++; emit({t: 'conf', x: W / 2, y: H * .3, n: 140, sp: 8}); emit({t: 'sfx', n: 'win'}); }
       } else if (hit[turn] && tanks[turn].hp > 0) {
         hit = [false, false, false, false];
-        wheel = {t: 0, spin: 210, idx: Math.floor(Math.random() * SPECIALS.length), flick: 0};
-        state = 'wheel';
+        startQuick();
       } else beginTurn(nextAlive(turn));
     }
   }
   if (state === 'over' && T % 6 === 0 && winner >= 0) confetti(rnd(0, W), -10, 3, 2);
+}
+// ---- hit -> key combo -> prize wheel
+function startQuick() {
+  qte = {seq: shuffled(['w', 'a', 's', 'd']), idx: 0, t: 0, limit: QTE_FRAMES + (net ? 12 : 0), done: false, ok: false, resT: 0, msg: '', ai: null};  // a little grace for network lag
+  state = 'quick';
+  emit({t: 'sfx', n: 'hit'});
+}
+function startWheel() {
+  wheel = {t: 0, spin: 210, idx: Math.floor(Math.random() * SPECIALS.length), flick: 0};
+  state = 'wheel';
+}
+function qteKey(k) {
+  const q = qte;
+  if (state !== 'quick' || !q || q.done) return;
+  if (k === q.seq[q.idx]) { q.idx++; emit({t: 'sfx', n: 'tick'}); if (q.idx >= q.seq.length) qteEnd(true, 'NICE!'); }
+  else qteEnd(false, 'WRONG KEY!');
+}
+function qteEnd(ok, msg) {
+  const q = qte, t = tanks[turn];
+  q.done = true; q.ok = ok; q.msg = msg;
+  emit({t: 'pop', x: t.x, y: t.y - 72, s: msg, c: ok ? '#86efac' : '#fca5a5', z: 22});
+  emit({t: 'sfx', n: ok ? 'prize' : 'fail'});
 }
 function wheelTicks() {   // shared by host and clients: spin animation + tick sounds
   const prev = wheel.t++;
@@ -622,6 +656,7 @@ function hostData(conn, d) {
   if (c) c.seen = performance.now();
   if (!c || mode !== 'play' || !d) return;
   const t = tanks[c.seat];
+  if (d.t === 'qk' && t && !t.ai && state === 'quick' && turn === c.seat && typeof d.k === 'string') qteKey(d.k.slice(0, 1).toLowerCase());
   if ((d.t === 'in' || d.t === 'fire') && t && !t.ai && state === 'aim' && turn === c.seat) {
     t.angle = clamp(+d.a || 0, 0, 180); t.power = clamp(+d.p || 0, 5, 100);
     if (d.w >= 0 && d.w <= 2 && t.ammo[d.w | 0] > 0) t.weapon = d.w | 0;
@@ -638,7 +673,8 @@ function netBroadcast() {
     k: tanks.map(t => [r1(t.x), r1(t.y), Math.round(t.hp), r1(t.angle), r1(t.power), t.weapon, r1(t.fuel),
                        t.special ? ALLW.indexOf(t.special) : -1, t.ammo.map(a => a === Infinity ? -1 : a)]),
     sh: shots.map(s => [s.id, r1(s.x), r1(s.y), Math.round(s.vx * 1000) / 1000, Math.round(s.vy * 1000) / 1000, ALLW.indexOf(s.w)]),
-    wh: wheel ? [wheel.t, wheel.idx, wheel.spin] : null, tl: turnLeft};
+    wh: wheel ? [wheel.t, wheel.idx, wheel.spin] : null, tl: turnLeft,
+    q: qte ? [qte.seq.join(''), qte.idx, qte.t, qte.limit, qte.done ? 1 : 0, qte.ok ? 1 : 0, qte.resT, qte.msg] : null};
   if (evq.length) { m.ev = evq; evq = []; }
   if (terrainDirty) { m.g = Array.from(ground, Math.round); terrainDirty = false; }
   bcast(m);
@@ -720,6 +756,8 @@ function applySnap(m) {
     s.x = a[1]; s.y = a[2]; s.vx = a[3]; s.vy = a[4];
   }
   shots = shots.filter(s => seen.has(s.id));
+  if (state === 'quick' && m.q) qte = {seq: m.q[0].split(''), idx: m.q[1], t: m.q[2], limit: m.q[3], done: !!m.q[4], ok: !!m.q[5], resT: m.q[6], msg: m.q[7]};
+  else if (state !== 'quick') qte = null;
   if (state === 'wheel' && m.wh) {
     if (!wheel) wheel = {t: m.wh[0], idx: m.wh[1], spin: m.wh[2], flick: 0};
     else if (Math.abs(wheel.t - m.wh[0]) > 4) wheel.t = m.wh[0];
@@ -740,10 +778,15 @@ function updateClient() {
     if (T % 2 === 0) addP({type: 'smoke', x: s.x, y: s.y, vx: rnd(-.1, .1), vy: rnd(-.1, .1), life: 26, size: 2.5, drag: .98});
   }
   if (wheel && state === 'wheel') wheelTicks();
+  if (qte && state === 'quick' && !qte.done) qte.t++;   // smooth the countdown between snapshots
   if (mine && T % 4 === 0) {
     const t = tanks[net.seat], sig = [r1(t.angle), r1(t.power), t.weapon, r1(t.x)].join();
     if (sig !== net.lastIn && net.conn.open) { net.lastIn = sig; net.conn.send({t: 'in', a: t.angle, p: t.power, w: t.weapon, x: t.x}); }
   }
+}
+function pressCombo(k) {   // keyboard or on-screen tap: host/offline resolves it, clients forward it
+  if (net && net.role === 'client') { if (net.conn.open) net.conn.send({t: 'qk', k}); }
+  else qteKey(k);
 }
 function tryFire() {
   if (net && net.role === 'client') {
@@ -1088,6 +1131,43 @@ function drawBanner() {
   ctx.restore();
 }
 
+function drawQuick() {
+  const q = qte, t = tanks[turn], mine = isMine(t) && !t.ai, cx = W / 2, y0 = 140;
+  ctx.fillStyle = 'rgba(4,6,14,.5)'; ctx.fillRect(0, 0, W, H);
+  const shakeX = q.done && !q.ok && q.resT < 12 ? Math.sin(q.resT * 2.2) * 8 : 0;   // shudder on a miss
+  ctx.save(); ctx.translate(shakeX, 0);
+  const col = q.done ? (q.ok ? '#4ade80' : '#ef4444') : t.color;
+  glow(col, 26); panel(cx - 260, y0, 520, 206, 24, col, 3); noGlow();
+  text(mine ? 'DIRECT HIT!  PRESS THE KEYS IN ORDER' : `PLAYER ${turn + 1} SCORED A HIT!`, cx, y0 + 30, 21, '#fff', 'center', '900');
+  text(mine ? 'nail the combo to spin the prize wheel' : t.ai ? 'the CPU is going for the prize wheel…' : 'they\'re going for the prize wheel…', cx, y0 + 55, 12, 'rgba(255,255,255,.7)', 'center', '700');
+  const sz = 72, gap = 14, x0 = cx - (4 * sz + 3 * gap) / 2, ty = y0 + 72;
+  ctx.globalAlpha = q.done ? .22 : 1;   // fade the tiles so the result text reads clearly
+  q.seq.forEach((k, i) => {
+    const x = x0 + i * (sz + gap), done = i < q.idx, cur = i === q.idx && !q.done, bump = cur ? Math.sin(T * .3) * 2 : 0;
+    ctx.save(); if (cur) glow(t.color, 18);
+    rr(x, ty + bump, sz, sz, 14);
+    ctx.fillStyle = done ? '#16a34a' : cur ? 'rgba(255,255,255,.22)' : 'rgba(255,255,255,.07)'; ctx.fill();
+    ctx.strokeStyle = done ? '#86efac' : cur ? '#fff' : 'rgba(255,255,255,.25)'; ctx.lineWidth = cur ? 3 : 2; ctx.stroke(); ctx.restore();
+    text(done ? '✓' : k.toUpperCase(), x + sz / 2, ty + sz / 2 + 2 + bump, done ? 38 : 40, done ? '#fff' : cur ? '#fff' : 'rgba(255,255,255,.55)', 'center', '900');
+  });
+  ctx.globalAlpha = 1;
+  const frac = clamp(1 - q.t / q.limit, 0, 1), bw = 420, by = y0 + 164;
+  rr(cx - bw / 2, by, bw, 14, 7); ctx.fillStyle = 'rgba(255,255,255,.12)'; ctx.fill();
+  if (frac > 0) { rr(cx - bw / 2, by, bw * frac, 14, 7); ctx.fillStyle = frac > .5 ? '#4ade80' : frac > .25 ? '#facc15' : '#ef4444'; ctx.fill(); }
+  text((Math.max(0, q.limit - q.t) / 60).toFixed(1) + 's', cx + bw / 2 + 36, by + 8, 14, '#fff', 'left', '800');
+  if (q.done) text(q.msg, cx, y0 + 104, 38, q.ok ? '#86efac' : '#fca5a5', 'center', '900', 'rgba(0,0,0,.7)');
+  ctx.restore();
+  if (mine && !q.done && touchMode) {   // on-screen keypad for phones
+    ['w', 'a', 's', 'd'].forEach((k, i) => {
+      const bx = cx - 136 + i * 70, by2 = y0 + 226;
+      uiButtons.push({x: bx, y: by2, w: 62, h: 62, tap: () => pressCombo(k)});
+      rr(bx, by2, 62, 62, 14); ctx.fillStyle = 'rgba(10,12,24,.85)'; ctx.fill(); ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 2; ctx.stroke();
+      text(k.toUpperCase(), bx + 31, by2 + 32, 28, '#fff', 'center', '900');
+    });
+  }
+  drawParts();
+}
+
 function drawWheel() {
   const n = SPECIALS.length, step = TAU / n, cx = W / 2, cy = H / 2 + 14, r = 168;
   const R = wheelAngle(wheel.t), t = tanks[turn], done = wheel.t >= wheel.spin;
@@ -1289,7 +1369,7 @@ function drawMenu() {
   [['←  →', 'aim the barrel'], ['↑  ↓', 'set power  (hold Shift for fine)'], ['A  D', 'drive (limited fuel)'], ['1  2  3', 'pick weapon'], ['SPACE', 'fire!'], ['T / M / P', 'aim assist / sound / pause']]
     .forEach(([k, d], i) => { const y = 444 + i * 24; rr(84, y - 10, 82, 20, 6); ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.fill(); text(k, 125, y + 1, 12, '#fff', 'center', '800'); text(d, 180, y + 1, 13, 'rgba(255,255,255,.85)', 'left', '600'); });
   panel(550, 392, 510, 200, 16);
-  text('HIT AN ENEMY → SPIN THE PRIZE WHEEL', 574, 416, 14, '#facc15', 'left', '900');
+  text('HIT AN ENEMY → NAIL THE W-A-S-D COMBO → SPIN!', 574, 416, 14, '#facc15', 'left', '900');
   SPECIALS.forEach((s, i) => {
     const x = 574 + (i % 2) * 245, y = 447 + Math.floor(i / 2) * 40;
     rr(x, y - 17, 235, 34, 10); ctx.fillStyle = s.color + '33'; ctx.fill(); ctx.strokeStyle = s.color + 'aa'; ctx.lineWidth = 1.5; ctx.stroke();
@@ -1305,6 +1385,7 @@ function draw() {
   drawWorld(tanks);
   uiButtons = [];
   drawCards(); drawWind(); drawControlPanel(); drawBanner();
+  if (state === 'quick' && qte) drawQuick();
   if (state === 'wheel' && wheel) drawWheel();
   if (state === 'over') drawOver();
   if (paused) {
@@ -1358,6 +1439,10 @@ addEventListener('keydown', e => {
   if (state === 'over' && k === 'enter' && (!net || net.role === 'host')) { startRound(); return; }
   if (paused || !tanks.length) return;
   const t = tanks[turn];
+  if (state === 'quick' && qte && !qte.done) {               // the post-hit W/A/S/D combo
+    if ('wasd'.includes(k) && k.length === 1 && !e.repeat && !t.ai && isMine(t)) pressCombo(k);
+    return;
+  }
   if (state === 'aim' && !t.ai && isMine(t)) {
     if (k === ' ' && !e.repeat) tryFire();
     const n = '123'.indexOf(k);
