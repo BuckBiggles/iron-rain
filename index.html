@@ -160,7 +160,30 @@ function makeTerrain() {
     for (const w of waves) y += Math.sin(x * w.f + w.p) * w.a;
     ground[x] = clamp(y, GROUND_MIN, GROUND_MAX);
   }
+  for (let i = 0; i < 4000 && sandStep(false) > 0.005; i++);   // start in equilibrium so only disturbed sand moves
 }
+
+// ---- sand: the ground is loose granular material. Wherever two neighbouring columns differ by more than the angle of
+// repose, the higher one sheds sand onto the lower one (volume is conserved), so craters cave in and piles spread out.
+const REPOSE = 0.72;                      // max height step between neighbouring pixel columns (~36 degrees, like dry sand)
+let sandActive = false, sandQuiet = 0, sandFrames = 0;
+function sandStep(fx = true) {
+  let moved = 0;
+  const fwd = (T & 1) === 0;              // alternate sweep direction so slides don't lean one way
+  for (let k = 0; k < W - 1; k++) {
+    const x = fwd ? k : W - 2 - k, d = ground[x + 1] - ground[x], ex = Math.abs(d) - REPOSE;
+    if (ex > 0.02) {
+      const m = Math.min(ex * 0.45, 2.4), hi = d > 0 ? x : x + 1, lo = d > 0 ? x + 1 : x;   // y grows downward: the smaller y is the higher sand
+      ground[hi] = Math.min(H, ground[hi] + m); ground[lo] -= m; moved += m;
+      if (fx && m > .8 && Math.random() < .12) dust(hi, ground[hi]);
+    }
+  }
+  return moved;
+}
+function dust(x, y) {
+  addP({type: 'dirt', x, y: y - 2, vx: rnd(-.6, .6), vy: -rnd(.2, 1.1), g: .05, life: rnd(18, 36), size: rnd(1.5, 3), color: theme.dirt[0]});
+}
+function disturbSand() { sandActive = true; sandQuiet = 0; sandFrames = 0; }
 
 function renderBG() {
   const c = document.createElement('canvas'); c.width = W; c.height = H;
@@ -235,7 +258,7 @@ function renderTex() {
 function makeScene(forceTheme, gdata) {
   themeIdx = forceTheme != null ? forceTheme : Math.floor(Math.random() * THEMES.length);
   theme = THEMES[themeIdx];
-  if (gdata) ground = Float32Array.from(gdata); else makeTerrain();
+  if (gdata) ground = Float32Array.from(gdata, v => v / 10); else makeTerrain();   // wire format is tenths of a pixel
   bgCanvas = renderBG();
   if (!texCanvas) texCanvas = renderTex();
   scorches = [];
@@ -259,9 +282,9 @@ function startRound() {
   makeScene();
   tanks = Array.from({length: numPlayers}, (_, i) => newTank(i));
   shots = []; parts = []; rings = []; flashes = []; popups = []; pending = []; wheel = null; winner = -1; evq = [];
-  hit = [false, false, false, false]; shake = 0; whiteFlash = 0; paused = false; terrainDirty = false;
+  hit = [false, false, false, false]; shake = 0; whiteFlash = 0; paused = false; terrainDirty = false; sandActive = false;
   mode = 'play';
-  if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, Math.round), np: numPlayers, ai: tanks.map(t => t.ai)});
+  if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, v => Math.round(v * 10)), np: numPlayers, ai: tanks.map(t => t.ai)});
   beginTurn(Math.floor(Math.random() * numPlayers));
 }
 // who controls a tank on this machine? (offline hot-seat: everyone; online: only your own seat)
@@ -330,6 +353,7 @@ function crater(cx, cy, r) {
     const dx = x - cx, dy = Math.sqrt(r * r - dx * dx);
     if (ground[x] >= cy - dy && ground[x] <= cy + dy) ground[x] = Math.min(H, cy + dy);
   }
+  disturbSand();
 }
 function fire() {
   const t = tanks[turn];
@@ -392,7 +416,7 @@ function explode(x, y, w, owner) {
       const dy = Math.sqrt(Math.max(0, w.radius * w.radius - (px - x) ** 2));
       if (ground[px] > y - dy) ground[px] = Math.max(60, y - dy);
     }
-    terrainDirty = true;
+    terrainDirty = true; disturbSand();
     emit({t: 'dirt', x, y, r: w.radius});
     return;
   }
@@ -508,6 +532,12 @@ function updateGame() {
   }
   if (paused) return;
 
+  if (sandActive) {   // loose sand keeps sliding until every slope is at its angle of repose
+    let mv = 0; for (let s = 0; s < 8; s++) mv += sandStep(s === 0);
+    if (mv > 1.0) { sandQuiet = 0; terrainDirty = true; } else if (++sandQuiet > 8) { sandActive = false; terrainDirty = true; }
+    if (++sandFrames > 240) { sandActive = false; terrainDirty = true; }   // never hold up the game for more than ~4 s
+  }
+
   for (const t of tanks) {
     tankCosmetics(t);
     const gy = ground[clamp(Math.floor(t.x), 0, W - 1)] - 4;
@@ -591,7 +621,7 @@ function updateGame() {
   }
 
   if (state === 'settle' && --aiTimer <= 0) {
-    const falling = tanks.some(t => t.hp > 0 && (t.vy > 0 || t.y < ground[clamp(Math.floor(t.x), 0, W - 1)] - 4.5));
+    const falling = sandActive || tanks.some(t => t.hp > 0 && (t.vy > 0 || t.y < ground[clamp(Math.floor(t.x), 0, W - 1)] - 4.5));
     if (!falling) {
       const alive = tanks.filter(t => t.hp > 0);
       if (alive.length <= 1) {
@@ -726,7 +756,7 @@ function netBroadcast() {
     wh: wheel ? [wheel.t, wheel.idx, wheel.spin] : null, tl: turnLeft,
     q: qte ? [qte.seq.join(''), qte.idx, qte.t, qte.limit, qte.done ? 1 : 0, qte.ok ? 1 : 0, qte.resT, qte.msg] : null};
   if (evq.length) { m.ev = evq; evq = []; }
-  if (terrainDirty) { m.g = Array.from(ground, Math.round); terrainDirty = false; }
+  if (terrainDirty && (!sandActive || T % 6 === 0)) { m.g = Array.from(ground, v => Math.round(v * 10)); terrainDirty = false; }   // while sand slides: 10 Hz; the final resting shape goes out immediately
   bcast(m);
 }
 
@@ -788,7 +818,11 @@ function applySnap(m) {
   state = m.st; turn = m.tn; wind = m.w; winner = m.wn; wins = m.ws; turnLeft = m.tl || 0;
   const nowMine = state === 'aim' && turn === net.seat;
   if (state !== 'aim') net.sent = false;
-  if (m.g) for (let x = 0; x < W; x++) ground[x] = m.g[x];
+  if (m.g) for (let x = 0; x < W; x++) {
+    const nv = m.g[x] / 10;
+    if (x % 4 === 0 && Math.abs(nv - ground[x]) > .6 && Math.random() < .12) dust(x, Math.min(nv, ground[x]));   // clients see the slides kick up dust too
+    ground[x] = nv;
+  }
   if (m.ev) for (const e of m.ev) applyEvent(e);
   m.k.forEach((a, i) => {
     const t = tanks[i]; if (!t) return;

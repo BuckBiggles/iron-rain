@@ -7,7 +7,7 @@ A Scorched Earth-style armored-artillery game with a military look, in a single 
 - 2–4 tanks, any mix of humans and CPU opponents
 - **Online multiplayer:** host a room, share the invite link or 5-letter code, friends join from their own browsers
 - Local hot-seat play on one screen is still there too
-- Destructible terrain, wind, and three weapons (Missile, Big Bomb, Triple)
+- Destructible terrain that behaves like loose sand (steep slopes slump, craters cave in, dirt piles spread), wind, and three weapons (Missile, Big Bomb, Triple)
 - Land a hit, then nail a 1-second W-A-S-D key combo to spin the prize wheel for a one-shot special attack:
   Nuke, MIRV, Dirt Bomb, Bouncer, Airstrike, Teleport, Vampire
 
