@@ -1076,11 +1076,57 @@ function aiThink(t) {
     if (!best || d < best.d) best = {a, p, d};
   }
   if (!best) best = {a: 90, p: 50, d: 999};
-  const err = 5;
-  aiPlan = {a: best.a + rnd(-err, err), p: clamp(best.p + rnd(-err, err), 20, 100), weapon: 0};
-  if (t.ammo[1] > 0 && best.d < 40 && Math.random() < .6) aiPlan.weapon = 1;
-  else if (t.ammo[2] > 0 && Math.random() < .3) aiPlan.weapon = 2;
+  // the drill: worth it when the normal shot is blocked (a ridge in the way) and drilling gets clearly closer,
+  // or when it can break into a cavern right under an enemy
+  let drill = null;
+  const behindCover = targets.some(o => {   // a hill between us: the straight line to them dips well below the ground
+    for (let k = 1; k < 20; k++) { const x = lerp(t.x, o.x, k / 20), y = lerp(t.y - 10, o.y - 10, k / 20); if (y > ground[Math.floor(x)] + 40) return true; }
+    return false;
+  });
+  const overCave = targets.some(o => caves.some(c => !c.falling && Math.abs(o.x - c.x) < c.w));
+  if (t.ammo[3] > 0 && (best.d > 30 || behindCover || overCave)) {
+    for (let a = 4; a <= 176; a += 3) for (let p = 20; p <= 100; p += 3) {
+      const r = simulateDrill(m.x, m.y, a, p * mult, wind, t.i);
+      if (!r || allies.some(o => Math.abs(r.x - o.x) < 70)) continue;
+      let d = Math.min(...targets.map(o => Math.hypot(r.x - o.x, r.y - o.y))), cave = false;
+      if (r.cave && targets.some(o => Math.abs(o.x - r.cave.x) < r.cave.w)) { cave = d > 20; d = Math.min(d, 20); }   // drop an enemy into the hole
+      if (!drill || d < drill.d) drill = {a, p, d, cave};
+    }
+  }
+  const useDrill = drill && (drill.d + 15 < best.d                                // clearly better than any normal shot
+                             || (drill.d < 18 && behindCover && Math.random() < .5) // punch through the hill they hide behind
+                             || (drill.cave && Math.random() < .45));               // or cave the ground in under them
+  if (useDrill) best = drill;
+  const err = useDrill ? 3 : 5;   // a drill line is less forgiving, so the CPU aims it more carefully
+  aiPlan = {a: best.a + rnd(-err, err), p: clamp(best.p + rnd(-err, err), 20, 100), weapon: useDrill ? 3 : 0};
+  if (!useDrill) {
+    if (t.ammo[1] > 0 && best.d < 40 && Math.random() < .6) aiPlan.weapon = 1;
+    else if (t.ammo[2] > 0 && Math.random() < .3) aiPlan.weapon = 2;
+  }
   t.weapon = aiPlan.weapon;
+}
+// where would a drill shot end up? Same rules as drillStep: fly, bore straight, break out and fly on, stop at a tank or cave
+function simulateDrill(sx, sy, angle, power, windv, self) {
+  const a = angle * Math.PI / 180, v = power * POWER_SCALE;
+  let x = sx, y = sy, vx = Math.cos(a) * v, vy = -Math.sin(a) * v, bore = WEAPONS[3].bore, under = false, dx = 0, dy = 0, spd = 0;
+  for (let i = 0; i < 2500; i++) {
+    if (!under) { vx += windv * WIND_SCALE; vy += G; x += vx; y += vy; }
+    else { x += dx * DRILL_SPEED; y += dy * DRILL_SPEED; bore -= DRILL_SPEED; }
+    if (x < 0 || x >= WW) return null;
+    if (y >= WH - 3) return {x, y};
+    const gy = ground[Math.floor(x)];
+    if (tanks.some(t => t.hp > 0 && t.i !== self && Math.hypot(x - t.x, y - (t.y - 8)) < (under ? 15 : 13))) return {x, y};
+    if (!under && y >= gy) {
+      if (bore <= 0) return {x, y};
+      under = true; spd = Math.hypot(vx, vy) || 1; dx = vx / spd; dy = vy / spd;
+    } else if (under) {
+      const cave = caves.find(c => !c.falling && Math.abs(y - (c.top + c.h / 2)) < caveVoid(c, x) / 2);
+      if (cave) return {x, y, cave};
+      if (bore <= 0) return {x, y};
+      if (y < gy) { under = false; vx = dx * spd * .85; vy = dy * spd * .85; }
+    }
+  }
+  return {x, y};
 }
 
 // ====================================================== update
