@@ -127,7 +127,7 @@ let wind = 0, turn = 0, state = 'aim', wins = [0, 0, 0, 0], winner = -1;
 let theme = THEMES[0], bgCanvas, texCanvas, vigCanvas, clouds = [], stars = [], streaks = [], menuTanks = [];
 let numPlayers = 2, numHumans = 1, menuStage = 'home';
 let mode = 'menu', paused = false, assist = true, muted = false;
-const TURN_SECONDS = 45, QTE_FRAMES = 120;   // 2-second key combo after a hit
+const TURN_SECONDS = 45, QTE_FRAMES = 180;   // 3-second A-S-D-F key combo after a hit
 let qte = null;
 const shuffled = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 let turnFrames = 0, turnLeft = 0;
@@ -474,10 +474,6 @@ function updateSky() {
     const climb = Math.sin(p.ang);                       // planes slow down climbing and speed up diving
     p.sp = clamp(p.sp - climb * .02 + (3.4 - p.sp) * .01, 2.4, 4.6);
     p.x += Math.cos(p.ang) * p.sp; p.y += Math.sin(p.ang) * p.sp;
-    for (const q of planes) if (q !== p && q.kind === 'fighter' && !q.down) {   // don't fly through each other
-      const dx = p.x - q.x, dy = p.y - q.y, d = Math.hypot(dx, dy);
-      if (d < 48 && d > .01) { p.x += dx / d * .7; p.y += dy / d * .7; if (q.side === p.side) p.ang += (dy >= 0 ? 1 : -1) * .01; }
-    }
     if (tgt && --p.cool <= 0 && best < 420 && onScreen) {
       const aim = Math.atan2(tgt.y - p.y, tgt.x - p.x);
       if (Math.abs(Math.atan2(Math.sin(aim - p.ang), Math.cos(aim - p.ang))) < .2) { p.burst = 14; p.cool = rnd(50, 110); if (Math.random() < .6) mgSfx(); }
@@ -905,10 +901,10 @@ function simulate(sx, sy, angle, power, windv, collect) {
 function previewPoints(t) {
   const m = muzzle(t), a = t.angle * Math.PI / 180, v = t.power * powerMult(t) * POWER_SCALE, pts = [];
   let x = m.x, y = m.y, vx = Math.cos(a) * v, vy = -Math.sin(a) * v;
-  for (let i = 0; i < 84; i++) {
+  for (let i = 0; i < 21; i++) {   // a short stub of the arc, just enough to show the launch direction
     vx += wind * WIND_SCALE; vy += G; x += vx; y += vy;
     if (x < 0 || x >= WW || y >= ground[Math.floor(x)]) break;
-    if (i % 4 === 3) pts.push([x, y]);
+    if (i % 2 === 1) pts.push([x, y]);
   }
   return pts;
 }
@@ -1166,7 +1162,7 @@ function updateGame() {
 }
 // ---- hit -> key combo -> prize wheel
 function startQuick() {
-  qte = {seq: shuffled(['w', 'a', 's', 'd']), idx: 0, t: 0, limit: QTE_FRAMES + (net ? 12 : 0), done: false, ok: false, resT: 0, msg: '', ai: null};  // a little grace for network lag
+  qte = {seq: ['a', 's', 'd', 'f'], idx: 0, t: 0, limit: QTE_FRAMES + (net ? 12 : 0), done: false, ok: false, resT: 0, msg: '', ai: null};  // a little grace for network lag
   state = 'quick';
   emit({t: 'sfx', n: 'hit'});
 }
@@ -1923,7 +1919,7 @@ function drawInfoCard() {
   panel(x, y, w, h, 10);
   // controls (two rows of key chips)
   const rows = [[['← →', 'Aim'], ['↑ ↓', 'Power'], ['Shift', 'Fine'], ['A D', 'Drive'], ['1 2 3', 'Weapon'], ['Space', 'Fire']],
-                [['W A S D', 'Auth code'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
+                [['A S D F', 'Auth code'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
   rows.forEach((row, r) => {
     let cx = x + 12; const cy = y + 14 + r * 20;
     for (const [k, d] of row) {
@@ -2573,8 +2569,8 @@ addEventListener('keydown', e => {
   if (state === 'over' && k === 'enter' && (!net || net.role === 'host')) { startRound(); return; }
   if (paused || !tanks.length) return;
   const t = tanks[turn];
-  if (state === 'quick' && qte && !qte.done) {               // the post-hit W/A/S/D combo
-    if ('wasd'.includes(k) && k.length === 1 && !e.repeat && !t.ai && isMine(t)) pressCombo(k);
+  if (state === 'quick' && qte && !qte.done) {               // the post-hit A/S/D/F combo
+    if ('asdf'.includes(k) && k.length === 1 && !e.repeat && !t.ai && isMine(t)) pressCombo(k);
     return;
   }
   if (state === 'aim' && !t.ai && isMine(t)) {

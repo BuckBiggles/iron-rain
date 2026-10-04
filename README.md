@@ -13,7 +13,7 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
   Last team standing wins and every member scores. Friendly fire hurts, but only hits on enemies earn a supply drop.
 - Ground that behaves like loose sand: steep slopes slump, craters cave in, dirt piles spread into dunes
 - Wind, and three weapons (Missile, Big Bomb, Triple)
-- Land a hit, then nail a 2-second W-A-S-D key combo to spin the supply-drop wheel for a one-shot special:
+- Land a hit, then type A-S-D-F within 3 seconds to spin the supply-drop wheel for a one-shot special:
   Nuke, MIRV, Dirt Bomb, Bouncer, Airstrike, Teleport, Vampire, **Orbital Strike** (satellite laser),
   and four status shells — **Incendiary, Cryo, EMP, Acid** — that leave the tanks they hit
   Burning / Frozen / Shorted / Corroded: **half power on their next shot**, then it wears off
@@ -39,7 +39,7 @@ The control panel and a controls + ammo card sit in a strip below the battlefiel
 | A D | Drive (limited fuel) |
 | 1 2 3 | Choose weapon |
 | Space | Fire |
-| W A S D | After a hit: press the 4 keys shown, in order, within 2 s |
+| A S D F | After a hit: press A, S, D, F in order within 3 s |
 | T / M / P | Aim assist / sound / pause (offline only) |
 | Armory | ←/→ tank, ↑/↓ colour, Enter ready, Tab next player (hot-seat) — or click |
 | Esc | Menu / leave room |
