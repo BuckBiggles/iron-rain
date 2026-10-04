@@ -347,6 +347,9 @@ function makeScene(forceTheme, gdata) {
   rain = Array.from({length: Math.round((theme.rain || 0) * 480)}, () => ({x: rnd(-150, WW + 150), y: rnd(-WH, WH), l: rnd(12, 26), v: rnd(15, 21)}));
   dustMotes = theme.dust ? Array.from({length: 160}, () => ({x: rnd(0, WW), y: rnd(WH * .25, WH), s: rnd(1, 2.6), ph: rnd(0, 9), v: rnd(.5, 1.5)})) : [];
   splashes = []; bolt = null; boltFlash = 0; nextBolt = Math.floor(rnd(240, 700));
+  planes = []; tracers = []; skyFx = []; nextWave = 20; nextBombers = Math.floor(rnd(300, 900));
+  spawnFighter(0, Math.random() < .5); spawnFighter(1, Math.random() < .5);   // open on a fight already underway
+  planes.forEach(p => { p.x = rnd(WW * .15, WW * .85); });
   veg = new Uint8Array(WW).fill(1);   // grass/weeds along the surface; blasted away by explosions
 }
 
@@ -392,6 +395,187 @@ function updateWeather() {
     if (bolt && --bolt.life <= 0) bolt = null;
     boltFlash *= .86;
   }
+}
+
+// ====================================================== the air war: background dogfights, bomber streams, flak, searchlights
+// Purely cosmetic and local to each browser (never synced). Planes fight in the vertical plane, like an old side-scroller:
+// each fighter chases the nearest enemy, fires tracer bursts when lined up, and goes down in smoke after enough hits.
+let planes = [], tracers = [], skyFx = [], nextWave = 60, nextBombers = 900;
+const SKY_TOP = 40, SKY_BOT = () => WH * .42;
+function spawnFighter(side, fromLeft) {
+  const y = rnd(SKY_TOP + 30, SKY_BOT() - 30), sp = rnd(3.1, 3.7);
+  planes.push({kind: 'fighter', side, x: fromLeft ? rnd(-260, -60) : WW + rnd(60, 260), y, ang: fromLeft ? rnd(-.2, .2) : Math.PI + rnd(-.2, .2),
+               sp, s: rnd(1.3, 1.6), hp: 20 + Math.floor(Math.random() * 14), down: false, cool: rnd(30, 90), burst: 0, wob: rnd(0, 9), smoke: 0, brk: 0, bdir: 1});
+}
+function spawnBombers() {
+  const fromLeft = Math.random() < .5, n = 3 + Math.floor(Math.random() * 3), y0 = rnd(SKY_TOP + 10, SKY_TOP + 70), side = Math.random() < .5 ? 0 : 1;
+  for (let k = 0; k < n; k++) {
+    const row = Math.floor((k + 1) / 2), off = k % 2 ? 1 : -1;   // a V (vic) formation
+    planes.push({kind: 'bomber', side, x: (fromLeft ? -120 : WW + 120) - (fromLeft ? 1 : -1) * row * 100, y: y0 + off * row * 26,
+                 ang: fromLeft ? 0 : Math.PI, sp: 1.25, s: 1.15, hp: 99, down: false, cool: 0, wob: rnd(0, 9), smoke: 0});
+  }
+  droneSfx(14);
+}
+function droneSfx(dur) {   // the low, throbbing drone of a bomber stream passing over
+  const a = audio(); if (!a || muted) return;
+  const t = a.currentTime, g = a.createGain(), f = a.createBiquadFilter();
+  f.type = 'lowpass'; f.frequency.value = 260;
+  g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.05, t + dur * .4); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
+  for (const hz of [62, 64.5, 93]) { const o = a.createOscillator(); o.type = 'sawtooth'; o.frequency.value = hz; o.connect(f); o.start(t); o.stop(t + dur + .1); }
+  f.connect(g).connect(a.destination);
+}
+function updateSky() {
+  const fighters = planes.filter(p => p.kind === 'fighter' && !p.down);
+  const maxPer = mode === 'play' ? 2 : 3;
+  if (--nextWave <= 0) {   // keep a dogfight going: top up whichever side is short, entering from opposite edges
+    nextWave = Math.floor(rnd(120, 360));
+    for (const side of [0, 1]) if (fighters.filter(p => p.side === side).length < maxPer && Math.random() < .8) spawnFighter(side, side === 0 ? Math.random() < .7 : Math.random() < .3);
+  }
+  if (--nextBombers <= 0) { nextBombers = Math.floor(rnd(1500, 2600)); spawnBombers(); }
+  for (const p of planes) {
+    if (p.down) {   // spinning down trailing smoke, until it disappears behind the hills
+      p.vy += .035; p.x += p.vx; p.y += p.vy; p.ang += p.spin;
+      if (T % 2 === 0) skyFx.push({t: 'smoke', x: p.x, y: p.y, r: 4 * p.s, life: 110, max: 110, dark: 1});
+      if (Math.random() < .5) skyFx.push({t: 'fire', x: p.x, y: p.y, r: 3 * p.s, life: 12, max: 12});
+      if (p.y > WH * .6) { p.gone = true; skyFx.push({t: 'crash', x: p.x, y: WH * .6, r: 26, life: 40, max: 40}); for (let k = 0; k < 5; k++) skyFx.push({t: 'smoke', x: p.x + rnd(-8, 8), y: WH * .6 - rnd(0, 20), r: 9, life: 260, max: 260, dark: 1, rise: 1}); tone(70, 30, .6, 'sine', .07); }
+      continue;
+    }
+    if (p.kind === 'bomber') {
+      p.x += Math.cos(p.ang) * p.sp; p.y += Math.sin(T * .01 + p.wob) * .08;
+      if (Math.random() < .012) {   // flak bursting around the formation
+        const fx = p.x + rnd(-90, 90), fy = p.y + rnd(-40, 50);
+        skyFx.push({t: 'flak', x: fx, y: fy, r: rnd(7, 11), life: 70, max: 70});
+        if (Math.random() < .3) tone(110, 45, .25, 'sine', .035, rnd(.2, .6));
+      }
+      if (p.x < -400 || p.x > WW + 400) p.gone = true;
+      continue;
+    }
+    // fighter: chase the nearest live enemy fighter (or loiter/weave), stay inside the sky band
+    let tgt = null, best = 1e9;
+    for (const q of planes) if (q.kind === 'fighter' && !q.down && q.side !== p.side) { const d = Math.hypot(q.x - p.x, q.y - p.y); if (d < best) { best = d; tgt = q; } }
+    let want = p.ang + Math.sin(T * .03 + p.wob) * .6;
+    if (tgt) want = Math.atan2(tgt.y + Math.sin(tgt.ang) * 40 - p.y, tgt.x + Math.cos(tgt.ang) * 40 - p.x);   // lead the target a little
+    let tail = false;   // an enemy sitting on my tail? break hard, and reverse the break now and then (a scissors)
+    for (const q of planes) if (q.kind === 'fighter' && !q.down && q.side !== p.side) {
+      const dx = p.x - q.x, dy = p.y - q.y, d = Math.hypot(dx, dy);
+      if (d < 230 && Math.cos(Math.atan2(dy, dx) - q.ang) > .8 && Math.cos(Math.atan2(-dy, -dx) - p.ang) < 0) tail = true;
+    }
+    if (!(--p.brk > 0)) { p.brk = Math.floor(rnd(50, 110)); p.bdir = Math.random() < .5 ? 1 : -1; }
+    if (tail) want = p.ang + p.bdir * 1.4;
+    if (tgt && best < 110 && !tail) p.sp -= .06;   // overshooting: throttle back
+    const onScreen = p.x > -40 && p.x < WW + 40;
+    if (p.y < SKY_TOP) want = Math.abs(Math.cos(p.ang)) > .2 ? (Math.cos(p.ang) > 0 ? .5 : Math.PI - .5) : Math.PI / 2;
+    if (p.y > SKY_BOT()) want = Math.cos(p.ang) > 0 ? -.5 : Math.PI + .5;
+    if (p.x < 40 && Math.cos(p.ang) < .3) want = Math.sin(p.ang) < 0 ? -.4 : .4;              // keep the fight on screen
+    if (p.x > WW - 40 && Math.cos(p.ang) > -.3) want = Math.sin(p.ang) < 0 ? Math.PI + .4 : Math.PI - .4;
+    if (!tgt && onScreen && Math.random() < .002) want += Math.PI;   // nothing to fight: occasionally turn back for another pass
+    let da = Math.atan2(Math.sin(want - p.ang), Math.cos(want - p.ang));
+    const tr = tail ? .065 : .045; p.ang += clamp(da, -tr, tr);
+    const climb = Math.sin(p.ang);                       // planes slow down climbing and speed up diving
+    p.sp = clamp(p.sp - climb * .02 + (3.4 - p.sp) * .01, 2.4, 4.6);
+    p.x += Math.cos(p.ang) * p.sp; p.y += Math.sin(p.ang) * p.sp;
+    for (const q of planes) if (q !== p && q.kind === 'fighter' && !q.down) {   // don't fly through each other
+      const dx = p.x - q.x, dy = p.y - q.y, d = Math.hypot(dx, dy);
+      if (d < 48 && d > .01) { p.x += dx / d * .7; p.y += dy / d * .7; if (q.side === p.side) p.ang += (dy >= 0 ? 1 : -1) * .01; }
+    }
+    if (tgt && --p.cool <= 0 && best < 420 && onScreen) {
+      const aim = Math.atan2(tgt.y - p.y, tgt.x - p.x);
+      if (Math.abs(Math.atan2(Math.sin(aim - p.ang), Math.cos(aim - p.ang))) < .2) { p.burst = 14; p.cool = rnd(50, 110); if (Math.random() < .6) mgSfx(); }
+    }
+    if (p.burst > 0 && p.burst-- % 2 === 0) {   // tracer rounds
+      const a = p.ang + rnd(-.04, .04), nose = 16 * p.s;
+      tracers.push({x: p.x + Math.cos(p.ang) * nose, y: p.y + Math.sin(p.ang) * nose, vx: Math.cos(a) * 17 + Math.cos(p.ang) * p.sp, vy: Math.sin(a) * 17 + Math.sin(p.ang) * p.sp, life: 26, side: p.side});
+    }
+    if (p.smoke > 0 && T % 3 === 0) skyFx.push({t: 'smoke', x: p.x, y: p.y, r: 3 * p.s, life: 60, max: 60, dark: .5});
+  }
+  for (const b of tracers) {
+    b.x += b.vx; b.y += b.vy; b.life--;
+    for (const q of planes) {
+      if (q.kind !== 'fighter' || q.down || q.side === b.side) continue;
+      if (Math.abs(q.x - b.x) < 15 * q.s && Math.abs(q.y - b.y) < 9 * q.s) {
+        b.life = 0; q.hp--; q.smoke = 1; skyFx.push({t: 'spark', x: b.x, y: b.y, r: 5, life: 8, max: 8});
+        if (q.hp <= 0) { q.down = true; q.vx = Math.cos(q.ang) * q.sp * .8; q.vy = Math.sin(q.ang) * q.sp * .8; q.spin = rnd(.04, .09) * (Math.random() < .5 ? 1 : -1);
+                         skyFx.push({t: 'flak', x: q.x, y: q.y, r: 13, life: 50, max: 50, fire: 1}); }
+        break;
+      }
+    }
+  }
+  tracers = tracers.filter(b => b.life > 0);
+  planes = planes.filter(p => !p.gone && !(p.kind === 'fighter' && !p.down && (p.x < -600 || p.x > WW + 600)));
+  for (const f of skyFx) { f.life--; if (f.t === 'smoke') { f.r += f.rise ? .12 : .06; f.x += (mode === 'play' ? wind : 3) * .04; if (f.rise) f.y -= .25; } }
+  skyFx = skyFx.filter(f => f.life > 0);
+  if (skyFx.length > 700) skyFx.splice(0, skyFx.length - 700);
+}
+function mgSfx() {   // a distant machine-gun rattle
+  for (let k = 0; k < 6; k++) setTimeout(() => noise(.035, .025, 2600, 900), k * 55);
+}
+
+// side-view fighter / bomber silhouettes, drawn rotated to the heading and flipped so the canopy stays on top
+const PLANE_COL = [{body: '#5a5f3e', belly: '#8d9277', mark: 'star', nose: '#3c4029'},     // Allied: olive drab
+                   {body: '#5d646b', belly: '#9aa3a8', mark: 'cross', nose: '#c9a227'}];   // Axis: grey, yellow nose
+function drawPlane(p) {
+  const c = PLANE_COL[p.side], big = p.kind === 'bomber';
+  ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.ang);
+  if (Math.cos(p.ang) < 0) ctx.scale(1, -1);
+  ctx.scale(p.s, p.s);
+  if (big) {   // twin-engine bomber
+    ctx.fillStyle = c.body;
+    ctx.beginPath(); ctx.moveTo(30, 0); ctx.quadraticCurveTo(28, -6, 18, -6.5); ctx.lineTo(-26, -4); ctx.lineTo(-34, -1.5); ctx.lineTo(-34, 1.5); ctx.lineTo(-20, 4); ctx.lineTo(20, 5); ctx.quadraticCurveTo(29, 4, 30, 0); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-24, -4); ctx.lineTo(-33, -15); ctx.lineTo(-37, -15); ctx.lineTo(-34, -1); ctx.fill();   // tail fin
+    ctx.fillStyle = c.belly; ctx.fillRect(-16, 1.5, 30, 2.5);
+    ctx.fillStyle = shade(c.body, -.3); ctx.fillRect(-8, -1, 20, 3.5);   // wing root
+    ctx.fillStyle = '#222'; ctx.beginPath(); ctx.ellipse(6, 4.5, 6, 3, 0, 0, TAU); ctx.fill();          // engine nacelle
+    ctx.fillStyle = 'rgba(190,210,220,.7)'; ctx.fillRect(20, -5.5, 6, 2.5);                             // glazed nose
+    ctx.strokeStyle = 'rgba(220,220,220,.35)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(13, -1); ctx.lineTo(13, 10); ctx.stroke();   // prop blur
+  } else {     // single-engine fighter
+    ctx.fillStyle = c.body;
+    ctx.beginPath(); ctx.moveTo(17, -1); ctx.quadraticCurveTo(16, -4.5, 9, -4.5); ctx.lineTo(-13, -2.2); ctx.lineTo(-18, -1); ctx.lineTo(-18, 1.2); ctx.lineTo(-10, 2.4); ctx.lineTo(9, 3.6); ctx.quadraticCurveTo(16, 3.4, 17, -1); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-12, -2); ctx.lineTo(-17, -9.5); ctx.lineTo(-20, -9.5); ctx.lineTo(-18.5, -.5); ctx.fill();   // fin
+    ctx.fillStyle = c.belly; ctx.beginPath(); ctx.ellipse(1, 2.2, 10, 1.4, 0, 0, TAU); ctx.fill();
+    ctx.fillStyle = shade(c.body, -.35); ctx.beginPath(); ctx.ellipse(2, .8, 7.5, 2.1, 0, 0, TAU); ctx.fill();   // wing seen edge-on
+    ctx.fillStyle = 'rgba(175,200,215,.85)'; ctx.beginPath(); ctx.ellipse(1, -4.6, 4.2, 2.2, 0, Math.PI, TAU); ctx.fill();   // canopy
+    ctx.fillStyle = c.nose; ctx.beginPath(); ctx.ellipse(15.5, -.6, 2.2, 2.6, 0, 0, TAU); ctx.fill();           // spinner
+    ctx.fillStyle = 'rgba(230,230,230,.28)'; ctx.fillRect(17.5, -8, 1.3, 15);                                     // prop blur
+    if (c.mark === 'star') { ctx.fillStyle = '#e8e8e0'; ctx.beginPath(); ctx.arc(-6, -.2, 2.1, 0, TAU); ctx.fill(); ctx.fillStyle = '#2f4a7a'; ctx.beginPath(); ctx.arc(-6, -.2, 1.1, 0, TAU); ctx.fill(); }
+    else { ctx.fillStyle = '#eee'; ctx.fillRect(-7.8, -2, 3.6, 3.6); ctx.fillStyle = '#111'; ctx.fillRect(-6.6, -2, 1.2, 3.6); ctx.fillRect(-7.8, -.8, 3.6, 1.2); }
+  }
+  ctx.restore();
+}
+function drawSky() {
+  const night = theme.name === 'Night' || theme.name === 'Dusk';
+  if (night || mode !== 'play') {   // searchlights sweeping up from behind the hills
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    const n = mode === 'play' ? 3 : 5, a0 = night ? .10 : .05;
+    for (let k = 0; k < n; k++) {
+      const bx = WW * (k + .5) / n + Math.sin(k * 7.3) * 90, by = WH * .62, ang = -Math.PI / 2 + Math.sin(T * .006 + k * 2.1) * .55, len = WH * .9, sp = .045;
+      const g = ctx.createLinearGradient(bx, by, bx + Math.cos(ang) * len, by + Math.sin(ang) * len);
+      g.addColorStop(0, `rgba(255,248,215,${a0 * 2.2})`); g.addColorStop(1, 'rgba(255,248,215,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(bx, by);
+      ctx.lineTo(bx + Math.cos(ang - sp) * len, by + Math.sin(ang - sp) * len); ctx.lineTo(bx + Math.cos(ang + sp) * len, by + Math.sin(ang + sp) * len); ctx.closePath(); ctx.fill();
+    }
+    ctx.restore();
+  }
+  ctx.globalAlpha = .9;
+  for (const f of skyFx) {
+    const k = f.life / f.max;
+    if (f.t === 'smoke') { ctx.fillStyle = f.dark ? `rgba(28,26,24,${.42 * k * (f.dark)})` : `rgba(200,200,200,${.3 * k})`; ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, TAU); ctx.fill(); }
+    else if (f.t === 'flak') {   // a black puff with an orange heart for the first few frames
+      const r = f.r * (1.6 - k * .6);
+      ctx.fillStyle = `rgba(22,20,18,${.65 * k})`; ctx.beginPath(); ctx.arc(f.x, f.y, r, 0, TAU); ctx.arc(f.x + r * .6, f.y - r * .3, r * .7, 0, TAU); ctx.fill();
+      if (k > .82 || f.fire && k > .5) { ctx.fillStyle = `rgba(255,170,60,${(k - .5) * 1.8})`; ctx.beginPath(); ctx.arc(f.x, f.y, r * .55, 0, TAU); ctx.fill(); }
+    } else if (f.t === 'fire' || f.t === 'spark') { ctx.fillStyle = `rgba(255,${f.t === 'spark' ? 230 : 150},60,${k})`; ctx.beginPath(); ctx.arc(f.x, f.y, f.r * (f.t === 'spark' ? 1 - k * .5 : 1), 0, TAU); ctx.fill(); }
+    else if (f.t === 'crash') {   // a glow + fireball beyond the hills
+      const g = ctx.createRadialGradient(f.x, f.y, 0, f.x, f.y, f.r * 3); g.addColorStop(0, `rgba(255,190,90,${.8 * k})`); g.addColorStop(1, 'rgba(255,120,40,0)');
+      ctx.fillStyle = g; ctx.beginPath(); ctx.arc(f.x, f.y, f.r * 3, 0, TAU); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = 1.6; ctx.strokeStyle = 'rgba(255,214,120,.8)'; ctx.beginPath();
+  for (const b of tracers) { ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx * .45, b.y - b.vy * .45); }
+  ctx.stroke();
+  ctx.globalAlpha = theme.name === 'Night' ? .7 : .88;   // a touch of atmospheric haze on the silhouettes
+  for (const p of planes) drawPlane(p);
+  ctx.globalAlpha = 1;
 }
 
 function drawGrain() {   // subtle film grain over the battlefield
@@ -543,7 +727,7 @@ function updateFx() {
   shake *= .9; if (shake < .15) shake = 0; whiteFlash *= .9;
   const wv = mode === 'menu' ? 3 : wind;
   for (const c of clouds) { c.x += c.v + wv * .03 * (.5 + c.layer * .4); if (c.x > WW + 80) c.x = -680; if (c.x < -680) c.x = WW + 80; }
-  updateWeather();
+  updateWeather(); updateSky();
   for (const s of streaks) { s.x += wv * .55 * s.s; if (s.x > WW + 40) s.x = -40; if (s.x < -40) s.x = WW + 40; }
   if (banner && ++banner.t > 110) banner = null;
 }
@@ -789,6 +973,69 @@ function humanControl(t) {
   }
 }
 
+// the menu / armory / lobby backdrop: the parked tanks trade (harmless) shots across the field
+let menuShells = [], nextMenuShot = 90;
+function menuBattle() {
+  for (const t of menuTanks) {
+    if (t.aim == null) t.aim = 90 + Math.sin(T * .02 + t.i * 1.7) * 55;
+    t.angle += (t.aim - t.angle) * .06; t.recoil *= .85;
+  }
+  if (--nextMenuShot <= 0 && menuTanks.length > 1) {
+    nextMenuShot = Math.floor(rnd(70, 160));
+    const t = pick(menuTanks), o = pick(menuTanks.filter(q => q !== t));
+    const tf = rnd(75, 105), m = muzzle(t), dx = o.x + rnd(-40, 40) - m.x, dy = o.y - m.y;
+    const vx = dx / tf, vy = (dy - .5 * G * tf * tf) / tf;
+    t.aim = clamp(Math.atan2(-vy, vx) * 180 / Math.PI, 5, 175); t.fireIn = 22; t.shot = {vx, vy};
+  }
+  for (const t of menuTanks) if (t.fireIn && --t.fireIn === 0) {   // fire once the barrel has swung onto target
+    const m = muzzle(t), a = t.angle * Math.PI / 180, sp = Math.hypot(t.shot.vx, t.shot.vy);
+    menuShells.push({x: m.x, y: m.y, vx: Math.cos(a) * sp, vy: -Math.sin(a) * sp, trail: []});
+    t.recoil = 8;
+    burst(m.x, m.y, 8, {type: 'fire', s0: .5, s1: 3, l0: 8, l1: 16, z0: 3, z1: 6, drag: .9});
+    burst(m.x, m.y, 6, {type: 'smoke', s0: .2, s1: 1, l0: 30, l1: 50, z0: 4, z1: 7, drag: .96, g: -.02});
+    tone(150, 45, .22, 'triangle', .06);
+  }
+  for (const s of menuShells) {
+    s.vy += G; s.x += s.vx; s.y += s.vy; s.trail.push([s.x, s.y]); if (s.trail.length > 18) s.trail.shift();
+    const gx = clamp(Math.floor(s.x), 0, WW - 1);
+    if (s.y >= ground[gx] || s.x < -50 || s.x > WW + 50) {
+      s.dead = true;
+      if (s.x > 0 && s.x < WW) { const m0 = muted; muted = true; explosionFx(s.x, ground[gx], 26); muted = m0; shake = Math.min(shake, 2.5); noise(.4, .12, 1400, 80); }
+    }
+  }
+  menuShells = menuShells.filter(s => !s.dead);
+}
+function drawMenuShells() {
+  ctx.lineCap = 'round';
+  for (const s of menuShells) {
+    ctx.strokeStyle = 'rgba(255,220,150,.35)'; ctx.lineWidth = 2; ctx.beginPath();
+    s.trail.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke();
+    ctx.fillStyle = '#fff3cf'; ctx.beginPath(); ctx.arc(s.x, s.y, 3, 0, TAU); ctx.fill();
+  }
+}
+
+// old newsreel look for the backdrop behind the menus: sepia, flicker, scratches, dust and a rounded gate
+let reelCanvas = null, scratchesR = [];
+function drawNewsreel() {
+  ctx.save();
+  ctx.globalCompositeOperation = 'color'; ctx.fillStyle = 'rgba(122,98,60,.82)'; ctx.fillRect(0, 0, WW, WH);   // sepia
+  ctx.globalCompositeOperation = 'multiply'; ctx.fillStyle = '#d8c7a2'; ctx.fillRect(0, 0, WW, WH);
+  ctx.restore();
+  ctx.fillStyle = `rgba(20,14,6,${rnd(0, .09)})`; ctx.fillRect(0, 0, WW, WH);                   // projector flicker
+  if (Math.random() < .08) scratchesR.push({x: rnd(0, WW), life: Math.floor(rnd(4, 18)), w: rnd(.8, 2.2), a: rnd(.15, .4)});
+  for (const s of scratchesR) { s.life--; s.x += rnd(-2, 2); ctx.fillStyle = `rgba(250,240,215,${s.a})`; ctx.fillRect(s.x, 0, s.w, WH); }
+  scratchesR = scratchesR.filter(s => s.life > 0);
+  ctx.fillStyle = 'rgba(25,18,8,.6)';
+  for (let k = 0; k < 6; k++) if (Math.random() < .5) { ctx.beginPath(); ctx.ellipse(rnd(0, WW), rnd(0, WH), rnd(1, 4), rnd(1, 3), rnd(0, 3), 0, TAU); ctx.fill(); }
+  if (Math.random() < .03) { ctx.strokeStyle = 'rgba(25,18,8,.5)'; ctx.lineWidth = 1.2; ctx.beginPath(); const x = rnd(0, WW), y = rnd(0, WH); ctx.moveTo(x, y); ctx.bezierCurveTo(x + rnd(-30, 30), y + rnd(-30, 30), x + rnd(-30, 30), y + rnd(-30, 30), x + rnd(-40, 40), y + rnd(-40, 40)); ctx.stroke(); }   // a hair in the gate
+  if (!reelCanvas) {   // heavy rounded-corner vignette, like a projected film frame
+    reelCanvas = document.createElement('canvas'); reelCanvas.width = WW; reelCanvas.height = WH;
+    const g = reelCanvas.getContext('2d'), vg = g.createRadialGradient(WW / 2, WH / 2, WH * .3, WW / 2, WH / 2, WW * .62);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(12,8,2,.75)'); g.fillStyle = vg; g.fillRect(0, 0, WW, WH);
+  }
+  ctx.drawImage(reelCanvas, 0, 0);
+}
+
 function update() {
   if (net && net.role === 'client' && mode === 'play') { updateClient(); return; }
   updateGame();
@@ -799,7 +1046,7 @@ function updateGame() {
   updateFx();
   if (mode === 'menu' || mode === 'armory') {
     if (mode === 'armory') armoryTick();
-    for (const t of menuTanks) { t.angle = 90 + Math.sin(T * .02 + t.i * 1.7) * 55; t.recoil *= .85; }
+    menuBattle();
     return;
   }
   if (paused) return;
@@ -1224,12 +1471,13 @@ function drawBackdrop() {
     ctx.beginPath(); bolt.pts.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.stroke();
     ctx.lineWidth = 1; ctx.strokeStyle = '#fff'; ctx.stroke(); ctx.restore();
   }
-  for (const c of clouds) {   // soft parallax clouds
+  const cloudLayer = near => { for (const c of clouds) {   // soft parallax clouds
+    if ((c.layer === 2) !== near) continue;
     const spr = cloudSprites[c.spr]; if (!spr) continue;
     ctx.globalAlpha = [.45, .62, .8][c.layer] * (theme.rain ? 1 : .8);
     ctx.drawImage(spr, c.x, c.y, spr.width * c.s, spr.height * c.s);
-  }
-  ctx.globalAlpha = 1;
+  } ctx.globalAlpha = 1; };
+  cloudLayer(false); drawSky(); cloudLayer(true);   // the air war happens between the far and near clouds
   // low mist hugging the valleys
   const mg = ctx.createLinearGradient(0, WH * .48, 0, WH * .78);
   mg.addColorStop(0, `rgba(${theme.haze},0)`); mg.addColorStop(.6, `rgba(${theme.haze},${theme.rain ? .28 : .16})`); mg.addColorStop(1, `rgba(${theme.haze},0)`);
@@ -1497,7 +1745,7 @@ function drawWorld(actors) {
   for (const t of actors) if (t.hp > 0) drawTank(t, mode === 'play' && state === 'aim' && t.i === turn);
   for (const t of actors) if (t.hp > 0 && t.status) drawStatusFx(t);
   if (mode === 'play' && state === 'aim' && !paused) drawAimHelpers(tanks[turn]);
-  drawShots(); drawParts(); drawBeams(); drawRainAndDust();
+  drawShots(); if (mode !== 'play') drawMenuShells(); drawParts(); drawBeams(); drawRainAndDust();
   ctx.restore();
   if (boltFlash > .03) { ctx.fillStyle = `rgba(215,228,255,${boltFlash * .3})`; ctx.fillRect(0, 0, WW, WH); }   // lightning lights up the field
   drawGrain();
@@ -1837,18 +2085,50 @@ function drawOver() {
 }
 
 // ====================================================== drawing: menu
+// ---- 1940s war-office paperwork: aged manila sheets, typewriter text, tape and rubber stamps
+const TYPE = '"Courier New",Courier,"Lucida Console",monospace', PAPER_INK = '#2b2316', STAMP = '#a3271c';
+function ttext(s, x, y, size, color = PAPER_INK, align = 'left', weight = '700') {
+  ctx.font = `${weight} ${size}px ${TYPE}`; ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.fillStyle = color; ctx.fillText(s, x, y);
+}
+function paper(x, y, w, h, seed = 1, lift = 0) {
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 12 + lift * 3; ctx.shadowOffsetX = 2 + lift; ctx.shadowOffsetY = 4 + lift * 2;
+  const g = ctx.createLinearGradient(x, y, x + w * .3, y + h);
+  g.addColorStop(0, '#e6d9b4'); g.addColorStop(1, '#cbb789');
+  ctx.beginPath();   // slightly uneven, worn edges
+  ctx.moveTo(x, y + 1); ctx.lineTo(x + w * .4, y); ctx.lineTo(x + w, y + 1.5); ctx.lineTo(x + w - 1, y + h * .6); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w * .55, y + h - 1); ctx.lineTo(x + 1, y + h); ctx.lineTo(x, y + h * .4); ctx.closePath();
+  ctx.fillStyle = g; ctx.fill(); noGlow(); ctx.shadowOffsetX = ctx.shadowOffsetY = 0;
+  ctx.clip();
+  for (let k = 0; k < 4; k++) {   // coffee / water stains
+    const sx = x + hash01(seed * 7 + k) * w, sy = y + hash01(seed * 13 + k * 3) * h, sr = 10 + hash01(seed + k * 11) * Math.min(w, h) * .35;
+    const sg = ctx.createRadialGradient(sx, sy, sr * .6, sx, sy, sr); sg.addColorStop(0, 'rgba(140,100,40,.03)'); sg.addColorStop(.92, 'rgba(120,80,30,.07)'); sg.addColorStop(1, 'rgba(120,80,30,0)');
+    ctx.fillStyle = sg; ctx.fillRect(sx - sr, sy - sr, sr * 2, sr * 2);
+  }
+  const eg = ctx.createRadialGradient(x + w / 2, y + h / 2, Math.min(w, h) * .3, x + w / 2, y + h / 2, Math.max(w, h) * .75);
+  eg.addColorStop(0, 'rgba(90,60,20,0)'); eg.addColorStop(1, 'rgba(90,60,20,.32)'); ctx.fillStyle = eg; ctx.fillRect(x, y, w, h);   // browned edges
+  ctx.restore();
+}
+function tape(x, y, w, rot) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.fillStyle = 'rgba(232,226,196,.62)'; ctx.fillRect(-w / 2, -8, w, 16);
+  ctx.strokeStyle = 'rgba(120,110,80,.25)'; ctx.lineWidth = 1; ctx.strokeRect(-w / 2, -8, w, 16); ctx.restore();
+}
+function stamp(s, x, y, size, rot, color = STAMP, alpha = .85) {   // rubber stamp: bold caps in a double box, a bit uneven
+  ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.globalAlpha = alpha;
+  ctx.font = `900 ${size}px ${FONT}`; const tw = ctx.measureText(s).width + size * .9, th = size * 1.5;
+  ctx.strokeStyle = color; ctx.lineWidth = 2.4; ctx.strokeRect(-tw / 2, -th / 2, tw, th); ctx.lineWidth = 1; ctx.strokeRect(-tw / 2 + 4, -th / 2 + 4, tw - 8, th - 8);
+  text(s, 0, 1, size, color, 'center', '900');
+  ctx.restore();
+}
 function button(x, y, w, h, big, sub, key, color, action) {
   const hov = mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h;
   menuButtons.push({x, y, w, h, action});
-  ctx.save(); if (hov) glow(color, 24);
-  rr(x, y, w, h, 16);
-  const g = ctx.createLinearGradient(0, y, 0, y + h);
-  g.addColorStop(0, hov ? 'rgba(84,92,60,.96)' : 'rgba(50,56,38,.94)'); g.addColorStop(1, hov ? 'rgba(40,46,28,.96)' : 'rgba(22,25,16,.94)');
-  ctx.fillStyle = g; ctx.fill(); ctx.strokeStyle = hov ? color : 'rgba(214,204,150,.32)'; ctx.lineWidth = 2.2; ctx.stroke(); ctx.restore();
-  if (hov) hazard(x + 4, y + h - 8, w - 8, 4, .9);
-  text(big, x + w / 2, y + h * .42, 40, INK, 'center', '900', 'rgba(0,0,0,.45)');
-  text(sub, x + w / 2, y + h * .74, 13, INK_DIM, 'center', '700');
-  if (key) text('[' + key + ']', x + 12, y + 14, 11, INK_DIM, 'left', '800');
+  const ly = hov ? y - 3 : y;
+  paper(x, ly, w, h, x * .01 + h, hov ? 2 : 0);
+  ctx.fillStyle = color; ctx.fillRect(x, ly + 6, 6, h - 12);                     // coloured index tab down the left edge
+  text(big, x + w / 2, ly + h * (sub ? .42 : .5), h < 50 ? 26 : 40, PAPER_INK, 'center', '900');
+  if (sub) ttext(sub, x + w / 2, ly + h * .75, 12, 'rgba(43,35,22,.85)', 'center', '700');
+  if (key) ttext((/^\d$/.test(String(key)) ? 'No.' : '') + key, x + 14, ly + 14, 11, 'rgba(43,35,22,.6)', 'left', '700');
+  if (hov && h > 60) stamp('DEPLOY', x + w - 46, ly + 20, 12, -.18);
   return hov;
 }
 
@@ -1928,8 +2208,8 @@ function armoryTick() {          // host / local: launch once every unit is read
 
 function drawArmory() {
   menuButtons = [];
-  ctx.fillStyle = 'rgba(8,10,5,.62)'; ctx.fillRect(0, 0, W, H);
-  hazard(W / 2 - 300, 18, 600, 6, .85);
+  ctx.fillStyle = 'rgba(14,10,4,.38)'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#a3271c'; ctx.fillRect(W / 2 - 300, 18, 600, 4); ctx.fillStyle = 'rgba(233,220,180,.6)'; ctx.fillRect(W / 2 - 300, 24, 600, 1);
   text('ARMORY — SELECT YOUR TANK', W / 2, 46, 30, INK, 'center', '900', 'rgba(0,0,0,.6)');
   text(teamMode ? 'Pick a tank, a colour and a side, then hit READY. CPU units fill the smaller team.'
                 : 'Pick a tank and a colour, then hit READY. CPU units are assigned at random.', W / 2, 72, 13, INK_DIM, 'center', '700');
@@ -2078,18 +2358,17 @@ function renderTitle() {
   try { g.letterSpacing = '9px'; } catch (e) {}
   g.font = `900 76px ${FONT}`; g.textAlign = 'left'; g.textBaseline = 'middle';
   titleWidth = g.measureText(GAME_NAME).width;
-  // gunmetal lettering: brushed steel gradient with a hard specular band, dark outline, rain streaking down the face
+  // war-poster lettering: cream paint with a hard blood-red block shadow and a dark keyline, worn and chipped
   const x0 = (w - titleWidth) / 2, tg = g.createLinearGradient(0, 26, 0, 94);
-  tg.addColorStop(0, '#f2f5f7'); tg.addColorStop(.42, '#a9b2b9'); tg.addColorStop(.5, '#525b62'); tg.addColorStop(.56, '#cfd6db'); tg.addColorStop(1, '#5f686f');
-  g.lineWidth = 12; g.strokeStyle = 'rgba(10,12,14,.96)'; g.lineJoin = 'miter'; g.strokeText(GAME_NAME, x0, h / 2);
+  tg.addColorStop(0, '#f3e8c6'); tg.addColorStop(1, '#d9c592');
+  g.lineJoin = 'miter';
+  for (let d = 7; d >= 1; d--) { g.fillStyle = d > 1 ? '#7d2116' : '#a3271c'; g.fillText(GAME_NAME, x0 + d, h / 2 + d); }   // extruded red block shadow
+  g.lineWidth = 3; g.strokeStyle = '#1d150b'; g.strokeText(GAME_NAME, x0, h / 2);
   g.fillStyle = tg; g.fillText(GAME_NAME, x0, h / 2);
-  g.globalCompositeOperation = 'source-atop';
-  for (let i = 0; i < 70; i++) {   // brushed-metal scratches + wet streaks, only on the letters
-    const sx = x0 + Math.random() * titleWidth, sy = 22 + Math.random() * 60;
-    g.strokeStyle = Math.random() < .5 ? 'rgba(255,255,255,.18)' : 'rgba(30,40,50,.22)'; g.lineWidth = Math.random() < .7 ? 1 : 2;
-    g.beginPath(); g.moveTo(sx, sy); g.lineTo(sx + rnd(-1, 1), sy + rnd(10, 34)); g.stroke();
+  g.globalCompositeOperation = 'destination-out';
+  for (let i = 0; i < 260; i++) {   // chipped paint
+    g.fillStyle = `rgba(0,0,0,${rnd(.3, .9)})`; g.beginPath(); g.ellipse(x0 + Math.random() * (titleWidth + 8), 18 + Math.random() * 84, rnd(.4, 1.8), rnd(.3, 1.2), rnd(0, 3), 0, TAU); g.fill();
   }
-  g.globalCompositeOperation = 'source-over';
   g.globalCompositeOperation = 'destination-out';   // stencil bridges through letters with enclosed shapes
   for (let i = 0; i < GAME_NAME.length; i++) {
     if (!'ABDOPQRCGU0'.includes(GAME_NAME[i])) continue;
@@ -2098,14 +2377,39 @@ function renderTitle() {
   }
   titleCanvas = c;
 }
+function roundel(x, y, r) {   // white star in a dark-blue disc
+  ctx.fillStyle = '#e9e1c6'; ctx.beginPath(); ctx.arc(x, y, r + 3, 0, TAU); ctx.fill();
+  ctx.fillStyle = '#26365a'; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+  ctx.fillStyle = '#f1ead2'; star(x, y, r * .86); ctx.fill();
+}
+function ribbon(x, y, w, h, label) {   // a red banner with folded, notched tails
+  const t = 26;
+  ctx.fillStyle = '#5e160e';
+  for (const s of [-1, 1]) {
+    const ex = s < 0 ? x - t : x + w + t, ix = s < 0 ? x + 8 : x + w - 8;
+    ctx.beginPath(); ctx.moveTo(ix, y + 7); ctx.lineTo(ex, y + 7); ctx.lineTo(ex + s * -10, y + 7 + h / 2); ctx.lineTo(ex, y + h + 7); ctx.lineTo(ix, y + h + 7); ctx.closePath(); ctx.fill();
+  }
+  const g = ctx.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, '#b3301f'); g.addColorStop(1, '#86231a');
+  ctx.fillStyle = g; ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(243,232,198,.55)'; ctx.lineWidth = 1; ctx.strokeRect(x + 4, y + 4, w - 8, h - 8);
+  try { ctx.letterSpacing = '3px'; } catch (e) {}
+  text(label, x + w / 2 + 1.5, y + h / 2 + 1, 14, '#f3e8c6', 'center', '900');
+  try { ctx.letterSpacing = '0px'; } catch (e) {}
+}
+function drawPosterHeader() {
+  try { ctx.letterSpacing = '4px'; } catch (e) {}
+  text('★  WAR DEPARTMENT  ·  THEATRE OF OPERATIONS  ·  1944  ★', W / 2, 24, 12, '#e9dcb4', 'center', '800', 'rgba(20,14,6,.85)');
+  try { ctx.letterSpacing = '0px'; } catch (e) {}
+  ctx.save(); glow('rgba(0,0,0,.75)', 16); ctx.drawImage(titleCanvas, W / 2 - 450, 83 - 60, 900, 120); ctx.restore();
+  const rx = titleWidth / 2 + 58;
+  roundel(W / 2 - rx, 84, 24); roundel(W / 2 + rx, 84, 24);
+  ribbon(W / 2 - 250, 138, 500, 30, 'ARMORED ARTILLERY COMMAND');
+}
 function drawMenu() {
   menuButtons = [];
-  ctx.fillStyle = 'rgba(8,10,5,.38)'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(14,10,4,.28)'; ctx.fillRect(0, 0, W, H);
   if (!titleCanvas) renderTitle();
-  const bw = Math.min(W - 80, titleWidth + 150);
-  hazard(W / 2 - bw / 2, 36, bw, 7, .85); hazard(W / 2 - bw / 2, 126, bw, 7, .85);
-  ctx.save(); glow('rgba(0,0,0,.7)', 14); ctx.drawImage(titleCanvas, W / 2 - 450, 83 - 60, 900, 120); ctx.restore();
-  text('ARMORED ARTILLERY COMMAND  ·  DESTRUCTIBLE TERRAIN  ·  SUPPLY DROPS  ·  ONLINE OPS', W / 2, 153, 14, INK, 'center', '800', 'rgba(0,0,0,.6)');
+  drawPosterHeader();
 
   if (['join', 'connecting', 'lobby'].includes(menuStage)) { drawOnlineMenus(); return; }
   let any = false;
@@ -2134,17 +2438,25 @@ function drawMenu() {
   }
   cv.style.cursor = any ? 'pointer' : 'default';
 
-  // info panels
-  panel(60, 392, 470, 200, 16);
-  text('FIELD MANUAL', 84, 416, 14, '#d4a417', 'left', '900');
-  [['←  →', 'aim the barrel'], ['↑  ↓', 'set power  (hold Shift for fine)'], ['A  D', 'drive (limited fuel)'], ['1  2  3', 'pick weapon'], ['SPACE', 'fire!'], ['T / M / P', 'aim assist / sound / pause']]
-    .forEach(([k, d], i) => { const y = 444 + i * 24; rr(84, y - 10, 82, 20, 6); ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.fill(); text(k, 125, y + 1, 12, '#fff', 'center', '800'); text(d, 180, y + 1, 13, 'rgba(255,255,255,.85)', 'left', '600'); });
-  panel(550, 392, 510, 200, 16);
-  text('HIT AN ENEMY → AUTH CODE → SUPPLY DROP', 574, 414, 14, '#d4a417', 'left', '900');
-  SPECIALS.forEach((s, i) => {   // 12 prizes in a 3 x 4 grid
-    const x = 566 + (i % 3) * 162, y = 449 + Math.floor(i / 3) * 36;
-    rr(x, y - 16, 154, 32, 8); ctx.fillStyle = s.color + '33'; ctx.fill(); ctx.strokeStyle = s.color + 'aa'; ctx.lineWidth = 1.5; ctx.stroke();
-    text(s.icon, x + 16, y + 1, 16, '#fff', 'center'); text(s.name, x + 30, y - 6, 11.5, '#fff', 'left', '900'); text(s.tag, x + 30, y + 8, 9.5, 'rgba(255,255,255,.72)', 'left', '700');
+  // the briefing documents: a typed field manual and the supply manifest, taped down on the table
+  paper(60, 392, 470, 204, 3);
+  tape(110, 394, 70, -.12); tape(480, 394, 70, .1);
+  text('FIELD MANUAL  FM 17-IR', 84, 420, 16, PAPER_INK, 'left', '900');
+  ttext('OPERATION OF THE MEDIUM TANK', 84, 438, 10, 'rgba(43,35,22,.7)');
+  ctx.fillStyle = 'rgba(43,35,22,.5)'; ctx.fillRect(84, 448, 420, 1.2);
+  [['←  →', 'aim the barrel'], ['↑  ↓', 'set power (Shift = fine)'], ['A  D', 'drive (limited fuel)'], ['1  2  3', 'pick weapon'], ['SPACE', 'FIRE!'], ['T / M / P', 'aim assist / sound / pause']]
+    .forEach(([k, d], i) => { const y = 466 + i * 21; ctx.strokeStyle = 'rgba(43,35,22,.55)'; ctx.lineWidth = 1.2; rr(84, y - 9, 86, 18, 4); ctx.stroke();
+                              text(k, 127, y + 1, 12, PAPER_INK, 'center', '900'); ttext(d, 184, y + 1, 12.5); });
+  stamp('RESTRICTED', 452, 560, 14, -.2);
+  paper(550, 392, 510, 204, 5);
+  tape(600, 394, 70, .08); tape(1010, 394, 70, -.1);
+  text('SUPPLY MANIFEST', 574, 420, 16, PAPER_INK, 'left', '900');
+  ttext('HIT AN ENEMY > KEY THE AUTH CODE > SUPPLY DROP', 574, 438, 10, 'rgba(43,35,22,.7)');
+  ctx.fillStyle = 'rgba(43,35,22,.5)'; ctx.fillRect(574, 448, 462, 1.2);
+  SPECIALS.forEach((s, i) => {   // 12 prizes in a 3 x 4 grid, typed up as inventory lines
+    const x = 570 + (i % 3) * 160, y = 470 + Math.floor(i / 3) * 33;
+    ctx.fillStyle = s.color; ctx.fillRect(x, y - 13, 4, 26);
+    text(s.icon, x + 18, y + 1, 15, '#000', 'center'); text(s.name.toUpperCase(), x + 32, y - 6, 11.5, PAPER_INK, 'left', '900'); ttext(s.tag, x + 32, y + 8, 9.5, 'rgba(43,35,22,.75)');
   });
   drawUIParts();
 }
@@ -2153,7 +2465,8 @@ function drawMenu() {
 function draw() {
   ctx.setTransform(1, 0, 0, 1, 0, 0);              // world space (1680 x 945, top of the canvas)
   drawWorld(mode === 'play' ? tanks : menuTanks);
-  ctx.setTransform(S, 0, 0, S, 0, 0);              // interface space (1120 x 782) from here on
+  if (mode !== 'play') drawNewsreel();
+  ctx.setTransform(S, 0, 0, S, 0, 0);             // interface space (1120 x 782) from here on
   drawStrip();
   if (mode === 'menu' || mode === 'armory') {
     mode === 'menu' ? drawMenu() : drawArmory();
@@ -2199,7 +2512,7 @@ function drawOffscreenShells() {
 }
 
 function initMenuScene() {
-  numPlayers = 4; makeScene();
+  numPlayers = 4; makeScene(); menuShells = []; nextMenuShot = 60;
   menuTanks = [0, 1, 2, 3].map(i => { const t = newTank(i); t.model = Math.floor(Math.random() * TANKS.length); t.x = (130 + i * 285 + rnd(-30, 30)) * S; t.y = ground[Math.floor(t.x)] - 4; t.tilt = tiltAt(t.x); return t; });
   numPlayers = 2;
 }
