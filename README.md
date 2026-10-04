@@ -9,7 +9,8 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
 - Spawn points are random, except 1v1 and 2v2, which use fixed, tested positions
 - WWII skies: fighters dogfight and bombers drone over in the background
 - **Armory:** before the battle every player picks one of 8 tanks (Warhound, Bulwark, Jackal, Mammoth, Viper,
-  Rhino, Scorpion, Kodiak — each trading armor against mobility) and a colour, then hits READY. CPUs pick at random.
+  Rhino, Scorpion, Kodiak — each with its own ARMOR, MOBILITY and ATTACK, the % of normal damage its shells deal)
+  and a colour, then hits READY. CPUs pick at random.
 - **Online multiplayer:** host a room, share the invite link or 5-letter code, friends join from their own browsers
 - Local hot-seat play on one screen is still there too
 - **Teams mode** (3–4 tanks): in the armory switch FREE-FOR-ALL → TEAMS and pick ALPHA or BRAVO; CPUs fill the smaller side.
@@ -19,7 +20,7 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
   tank on top goes down with it (neighbouring caverns can chain-collapse)
 - No wind: shells fly on gravity alone. Four weapons: Missile, Big Bomb, Triple, and the **Drill** (2 per round), which bores straight
   through the earth to hit a tank behind a hill, burst out the far side, or break into a cavern and collapse it
-- Land a hit, then type A, S, D, F in the random order shown, within 3 seconds, to spin the supply-drop wheel for a one-shot special:
+- Land a hit, then type A, S, D, F in the random order shown, within 3 seconds, to spin the supply-drop wheel. Prizes go into your **stockpile** — keep as many as 8 and press **Q** (or click SUPPLY) to arm one when you want it:
   Nuke, MIRV, Dirt Bomb, Bouncer, Airstrike, Teleport, Vampire, **Orbital Strike** (satellite laser),
   and four status shells — **Incendiary, Cryo, EMP, Acid** — that leave the tanks they hit
   Burning / Frozen / Shorted / Corroded: **half power on their next shot**, then it wears off
@@ -44,6 +45,7 @@ The control panel and a controls + ammo card sit in a strip below the battlefiel
 | ↑ ↓ | Power (hold Shift for fine) |
 | A D | Drive (limited fuel) |
 | 1 2 3 4 | Choose weapon |
+| Q | Arm the next special from your supply stockpile (press again to cycle, past the last = none) |
 | Space | Fire |
 | A S D F | After a hit: press the 4 keys shown (A, S, D, F in a random order) within 3 s |
 | T / M / P | Aim assist / sound / pause (offline only) |

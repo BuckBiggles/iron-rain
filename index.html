@@ -15,7 +15,8 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const cv = document.getElementById('c');
+let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
 // code works in interface units and is drawn through a 2x transform. Result: a big map with tanks far apart,
 // while the interface stays the same size on screen.
@@ -51,7 +52,7 @@ const STATUSES = [
   {id:'corroded', name:'CORRODED', icon:'🧪', color:'#9bd14a'},
 ];
 const STATUS_MULT = 0.5;
-// Prize-wheel specials: one use, applied to the winner's next attack. short = wheel/HUD label, tag = menu blurb
+// Prize-wheel specials: one use each. They go into the tank's stockpile (STOCK_MAX); the player arms one with Q. short = wheel/HUD label, tag = menu blurb
 const SPECIALS = [
   {name:'NUKE',           short:'NUKE',       icon:'☢️', color:'#ef4444', tag:'Massive blast',     desc:'Massive blast',                       radius:115, damage:100, shots:1, kind:'nuke'},
   {name:'CRYO SHELL',     short:'CRYO',       icon:'❄️', color:'#6fb8de', tag:'Frozen: ½ power',   desc:'FREEZES targets: ½ power next shot',   radius:34, damage:40, shots:1, kind:'status', status:STATUSES[1]},
@@ -76,32 +77,32 @@ const PALETTE = ['#86a64a', '#d4a95c', '#6f93b3', '#c0583d', '#5d7a3a', '#8f8f86
 // the 8 tanks in the armory: same physics footprint, different looks plus an armor-vs-mobility trade-off.
 // Coordinates are in tank space (ground contact at y = 0, gun pivot at y = -22).
 const TANKS = [
-  {name:'WARHOUND', role:'Main battle tank', hp:200, fuel:60, wheels:5, wheelR:3.7,
+  {name:'WARHOUND', role:'Main battle tank', hp:200, fuel:60, atk:100, wheels:5, wheelR:3.7,
    hull:[[-17,-12.5],[17,-12.5],[21,-15],[15.5,-19.5],[-15.5,-19.5],[-21,-15]],
    turret:[[-12,-19.5],[12,-19.5],[10.5,-24.5],[3.5,-28],[-7.5,-28],[-11.5,-24]], gun:{len:29, w:4.4, sleeve:true, brake:true}, antennas:1},
-  {name:'BULWARK', role:'Heavy assault', hp:230, fuel:35, wheels:6, wheelR:3.2, skirt:true,
+  {name:'BULWARK', role:'Heavy assault', hp:230, fuel:35, atk:90, wheels:6, wheelR:3.2, skirt:true,
    hull:[[-19,-12.5],[19,-12.5],[22.5,-15.5],[19,-21],[-19,-21],[-22.5,-15.5]],
    turret:[[-13.5,-21],[13.5,-21],[12.5,-26.5],[7,-30.5],[-9,-30.5],[-13.5,-26.5]], gun:{len:30, w:5.4, sleeve:true, brake:true}, antennas:1},
-  {name:'JACKAL', role:'Light recon', hp:170, fuel:100, wheels:4, wheelR:4.2,
+  {name:'JACKAL', role:'Light recon', hp:170, fuel:100, atk:90, wheels:4, wheelR:4.2,
    hull:[[-16,-12],[16,-12],[19.5,-14],[13,-18],[-13,-18],[-18.5,-14]],
    turret:[[-8.5,-18],[9,-18],[7.5,-22.5],[-4.5,-24],[-8.5,-21.5]], gun:{len:30, w:3.2}, antennas:2},
-  {name:'MAMMOTH', role:'Twin-gun heavy', hp:225, fuel:30, wheels:6, wheelR:3.4, skirt:true,
+  {name:'MAMMOTH', role:'Twin-gun heavy', hp:225, fuel:30, atk:105, wheels:6, wheelR:3.4, skirt:true,
    hull:[[-20,-12.5],[20,-12.5],[23,-15],[18,-20.5],[-18,-20.5],[-23,-15]],
    turret:[[-14,-20.5],[13,-20.5],[13,-26],[8,-30],[-10,-30],[-14,-26]], gun:{len:28, w:3.8, sleeve:true, twin:true}, antennas:1},
-  {name:'VIPER', role:'Tank destroyer', hp:185, fuel:75, wheels:5, wheelR:3.5,
+  {name:'VIPER', role:'Tank destroyer', hp:185, fuel:75, atk:115, wheels:5, wheelR:3.5,
    hull:[[-18,-12.5],[18,-12.5],[22,-14],[12,-19],[-16,-19.5],[-20,-15]],
    turret:[[-13,-19],[14,-19],[11,-22.5],[-11,-24]], gun:{len:32, w:3.8, brake:true}, antennas:0},
-  {name:'RHINO', role:'Assault / dozer', hp:215, fuel:50, wheels:5, wheelR:3.7, dozer:true,
+  {name:'RHINO', role:'Assault / dozer', hp:215, fuel:50, atk:95, wheels:5, wheelR:3.7, dozer:true,
    hull:[[-17,-12.5],[17,-12.5],[19,-15],[16,-20],[-16,-20],[-20,-15.5]],
    dome:{rx:11, ry:8.5}, gun:{len:27, w:5.6, brake:true}, antennas:1},
-  {name:'SCORPION', role:'Desert long-gun', hp:190, fuel:65, wheels:5, wheelR:3.6, skirt:true,
+  {name:'SCORPION', role:'Desert long-gun', hp:190, fuel:65, atk:110, wheels:5, wheelR:3.6, skirt:true,
    hull:[[-17,-12.5],[17,-12.5],[21,-14.5],[14,-18.5],[-14,-18.5],[-20,-14.5]],
    dome:{rx:10, ry:7}, gun:{len:33, w:3.4, sleeve:true}, antennas:1},
-  {name:'KODIAK', role:'Reactive-armor MBT', hp:205, fuel:55, wheels:5, wheelR:3.7, era:true,
+  {name:'KODIAK', role:'Reactive-armor MBT', hp:205, fuel:55, atk:100, wheels:5, wheelR:3.7, era:true,
    hull:[[-18,-12.5],[18,-12.5],[21.5,-15],[16,-20],[-16,-20],[-21,-15]],
    turret:[[-13,-20],[11,-20],[16.5,-23.5],[8,-29],[-10,-29],[-14,-24.5]], gun:{len:30, w:4.4, sleeve:true, brake:true}, antennas:2},
 ];
-const HP_RANGE = [170, 230], FUEL_RANGE = [30, 100];
+const HP_RANGE = [170, 230], FUEL_RANGE = [30, 100], ATK_RANGE = [90, 115];   // atk = % of a weapon's normal damage
 // Teams mode: two sides, last side standing wins. Friendly fire still hurts, but only hits on enemies earn a supply drop.
 const TEAMS = [{name:'ALPHA', color:'#5aa7e6'}, {name:'BRAVO', color:'#e2574c'}];
 let teamMode = false, winTeam = -1;
@@ -200,6 +201,13 @@ function shade(hex, f) {
 }
 function glow(color, blur) { ctx.shadowColor = color; ctx.shadowBlur = blur; }
 function noGlow() { ctx.shadowBlur = 0; ctx.shadowColor = 'transparent'; }
+// cheap stand-in for a blurred glow around a box (shadowBlur on big panels every frame is expensive): two soft strokes
+function halo(x, y, w, h, r, color) {
+  ctx.save(); ctx.strokeStyle = color;
+  ctx.globalAlpha = .3; ctx.lineWidth = 5; rr(x - 2.5, y - 2.5, w + 5, h + 5, r + 2); ctx.stroke();
+  ctx.globalAlpha = .12; ctx.lineWidth = 9; rr(x - 6, y - 6, w + 12, h + 12, r + 5); ctx.stroke();
+  ctx.restore();
+}
 function panel(x, y, w, h, r = 14, border = 'rgba(214,204,150,.30)', bw = 1.5) {
   rr(x, y, w, h, r);
   const g = ctx.createLinearGradient(0, y, 0, y + h);
@@ -675,7 +683,7 @@ function newTank(i, x) {
   if (x == null) { const slot = WW / numPlayers; x = slot * i + rnd(slot * 0.3, slot * 0.7); }
   const lo = loadout && loadout[i], model = lo ? lo.model : 0, M = TANKS[model];
   return {i, x, y: ground[Math.floor(x)] - 4, model, team: lo && lo.team != null ? lo.team : i % 2, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: x < WW / 2 ? 55 : 125, power: 55, weapon: 0,
-          ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color: lo ? lo.color : COLORS[i], vy: 0, special: null, ai: net ? !net.occ[i] : i >= numHumans,
+          ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color: lo ? lo.color : COLORS[i], vy: 0, stock: [], armed: -1, ai: net ? !net.occ[i] : i >= numHumans,
           tilt: tiltAt(x), recoil: 0, dead: false};
 }
 function startRound() {
@@ -703,7 +711,7 @@ function nextAlive(from) {
 }
 function beginTurn(t) {
   turn = t; state = 'aim'; wind = 0;   // no wind: shells fly on gravity alone
-  tanks[t].fuel = tanks[t].maxFuel; aiPlan = null; aiTimer = 80;
+  tanks[t].fuel = tanks[t].maxFuel; tanks[t].armed = -1; aiPlan = null; aiTimer = 80;
   turnFrames = net && !tanks[t].ai ? TURN_SECONDS * 60 : 0;   // online humans get a shot clock so nobody can stall the game
   emit({t: 'turn', i: t});
 }
@@ -775,8 +783,8 @@ function crater(cx, cy, r) {
 }
 function fire() {
   const t = tanks[turn];
-  let w = t.special;
-  if (w) t.special = null;
+  let w = armedSpecial(t);
+  if (w) { t.stock.splice(t.armed, 1); t.armed = -1; }   // an armed supply-drop special is used up from the stockpile
   else { w = WEAPONS[t.weapon]; if (t.ammo[t.weapon] <= 0) return; t.ammo[t.weapon]--; }
   hit = [false, false, false, false];
   const m = muzzle(t), v = shotSpeed(shotPower(t));
@@ -793,6 +801,15 @@ function fire() {
   state = 'fly';
 }
 const powerMult = t => t.status ? STATUS_MULT : 1;
+// supply-drop stockpile: specials won on the wheel are kept until the player arms one (Q / click SUPPLY) and fires it
+const STOCK_MAX = 8;
+const armedSpecial = t => t && t.armed >= 0 ? t.stock[t.armed] || null : null;
+function cycleSupply(t) {   // none → 1st → 2nd → … → none
+  if (!t.stock.length) return;
+  t.armed = t.armed + 1 >= t.stock.length ? -1 : t.armed + 1; sfx.click();
+}
+// tank firepower: each model's attack rating scales the damage its shells (and their bomblets) deal
+const atkMult = owner => { const o = tanks[owner]; return o ? (TANKS[o.model || 0].atk || 100) / 100 : 1; };
 
 // ---- events: visual/audio happenings. The host emits them (and also sends them to clients); everyone plays them locally.
 function emit(e) { applyEvent(e); if (net && net.role === 'host') evq.push(e); }
@@ -894,7 +911,7 @@ function explode(x, y, w, owner) {
   for (const t of tanks) {
     const d = Math.hypot(t.x - x, t.y - 8 - y);
     if (t.hp > 0 && d < w.radius + 14) {
-      const dmg = Math.round(w.damage * (1 - Math.max(0, d - 14) / w.radius));
+      const dmg = Math.round(w.damage * atkMult(owner) * (1 - Math.max(0, d - 14) / w.radius));
       if (dmg <= 0) continue;
       t.hp -= dmg; emit({t: 'pop', x: t.x, y: t.y - 56, s: '-' + dmg, c: '#ff6b5e', z: 22 + dmg / 8});
       if (isEnemy(t, owner)) { hit[owner] = true; dealt += dmg; emit({t: 'sfx', n: 'hit'}); }
@@ -1037,7 +1054,7 @@ function orbitalImpact(s) {
   for (const t of tanks) {
     const dx = Math.abs(t.x - x);
     if (t.hp <= 0 || dx >= r + 14) continue;
-    const dmg = Math.round(s.w.damage * (1 - Math.max(0, dx - 14) / r));
+    const dmg = Math.round(s.w.damage * atkMult(s.owner) * (1 - Math.max(0, dx - 14) / r));
     if (dmg <= 0) continue;
     t.hp -= dmg; emit({t: 'pop', x: t.x, y: t.y - 56, s: '-' + dmg, c: '#7fd6f5', z: 22 + dmg / 8});
     if (isEnemy(t, s.owner)) { hit[s.owner] = true; emit({t: 'sfx', n: 'hit'}); }
@@ -1108,6 +1125,9 @@ function aiThink(t) {
     else if (t.ammo[2] > 0 && Math.random() < .3) aiPlan.weapon = 2;
   }
   t.weapon = aiPlan.weapon;
+  // supply stockpile: usually spend one (a random pick, but never Teleport, which would warp the CPU into the enemy)
+  const usable = t.stock.map((s, k) => s.kind === 'teleport' ? -1 : k).filter(k => k >= 0);
+  t.armed = usable.length && !useDrill && Math.random() < .65 ? pick(usable) : -1;
 }
 // where would a drill shot end up? Same rules as drillStep: fly, bore straight, break out and fly on, stop at a tank or cave
 function simulateDrill(sx, sy, angle, power, windv, self) {
@@ -1338,7 +1358,7 @@ function updateGame() {
   if (state === 'wheel') {
     wheelTicks();
     if (wheel.t === wheel.spin) {
-      tanks[turn].special = SPECIALS[wheel.idx];
+      { const tw = tanks[turn]; if (tw.stock.length < STOCK_MAX) tw.stock.push(SPECIALS[wheel.idx]); }   // into the stockpile
       emit({t: 'conf', x: W / 2, y: H / 2, n: 90, sp: 7}); emit({t: 'sfx', n: 'prize'});
     }
     if (wheel.t > wheel.spin + 130) { wheel = null; beginTurn(nextAlive(turn)); }
@@ -1476,6 +1496,7 @@ function hostData(conn, d) {
   if ((d.t === 'in' || d.t === 'fire') && t && !t.ai && state === 'aim' && turn === c.seat) {
     t.angle = clamp(+d.a || 0, 0, 180); t.power = clamp(+d.p || 0, 5, 100);
     if (d.w >= 0 && d.w < WEAPONS.length && t.ammo[d.w | 0] > 0) t.weapon = d.w | 0;
+    if (Number.isInteger(d.sp) && d.sp >= -1 && d.sp < t.stock.length) t.armed = d.sp;
     const dx = clamp((+d.x) - t.x, -30, 30);
     if (dx && t.fuel > 0) {
       const nx = clamp(t.x + dx, 14, WW - 14), cost = Math.abs(nx - t.x) / 0.8 * 0.5;
@@ -1487,7 +1508,7 @@ function hostData(conn, d) {
 function netBroadcast() {
   const m = {t: 's', st: state, tn: turn, w: wind, wn: winner, wt: winTeam, ws: wins,
     k: tanks.map(t => [r1(t.x), r1(t.y), Math.round(t.hp), r1(t.angle), r1(t.power), t.weapon, r1(t.fuel),
-                       t.special ? ALLW.indexOf(t.special) : -1, t.ammo.map(a => a === Infinity ? -1 : a), t.status ? STATUSES.indexOf(t.status) : -1]),
+                       t.stock.map(s => ALLW.indexOf(s)), t.ammo.map(a => a === Infinity ? -1 : a), t.status ? STATUSES.indexOf(t.status) : -1, t.armed]),
     sh: shots.map(s => [s.id, r1(s.x), r1(s.y), Math.round(s.vx * 1000) / 1000, Math.round(s.vy * 1000) / 1000, ALLW.indexOf(s.w), s.drilling ? 1 : 0]),
     wh: wheel ? [wheel.t, wheel.idx, wheel.spin] : null, tl: turnLeft,
     q: qte ? [qte.seq.join(''), qte.idx, qte.t, qte.limit, qte.done ? 1 : 0, qte.ok ? 1 : 0, qte.resT, qte.msg] : null};
@@ -1548,7 +1569,7 @@ function startClientRound(m) {
   tanks = m.ai.map((ai, i) => {
     const [model, color, team] = (m.lo && m.lo[i]) || [0, COLORS[i], i % 2], M = TANKS[model];
     return {i, x: 0, y: 0, tx: 0, ty: 0, ta: 55, tp: 55, init: false, model, team, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 55, power: 55,
-            weapon: 0, ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color, vy: 0, special: null, ai, tilt: 0, recoil: 0, dead: false};
+            weapon: 0, ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color, vy: 0, stock: [], armed: -1, ai, tilt: 0, recoil: 0, dead: false};
   });
   shots = []; parts = []; rings = []; flashes = []; popups = []; wheel = null; winner = -1; winTeam = -1; banner = null; strikes = []; beams = []; uiParts = [];
   shake = 0; whiteFlash = 0; state = 'aim'; turn = 0; mode = 'play'; net.sent = false;
@@ -1567,11 +1588,11 @@ function applySnap(m) {
   if (m.ev) for (const e of m.ev) applyEvent(e);
   m.k.forEach((a, i) => {
     const t = tanks[i]; if (!t) return;
-    t.hp = a[2]; t.special = a[7] >= 0 ? ALLW[a[7]] : null; t.ammo = a[8].map(v => v < 0 ? Infinity : v); t.dead = t.hp <= 0;
+    t.hp = a[2]; t.stock = (a[7] || []).map(k => ALLW[k]).filter(Boolean); if (t.armed >= t.stock.length) t.armed = -1; t.ammo = a[8].map(v => v < 0 ? Infinity : v); t.dead = t.hp <= 0;
     t.status = a[9] >= 0 ? STATUSES[a[9]] : null;
     const mineNow = nowMine && i === net.seat;
     if (mineNow && prevMine) return;           // while you're aiming, your local values are the truth
-    t.tx = a[0]; t.ty = a[1]; t.ta = a[3]; t.tp = a[4]; t.weapon = a[5]; t.fuel = a[6];
+    t.tx = a[0]; t.ty = a[1]; t.ta = a[3]; t.tp = a[4]; t.weapon = a[5]; t.fuel = a[6]; t.armed = a[10] < t.stock.length ? a[10] : -1;
     if (!t.init || mineNow) { t.x = t.tx; t.y = t.ty; t.angle = t.ta; t.power = t.tp; t.init = true; t.tilt = tiltAt(t.x); }
   });
   const seen = new Set();
@@ -1609,8 +1630,8 @@ function updateClient() {
   if (wheel && state === 'wheel') wheelTicks();
   if (qte && state === 'quick' && !qte.done) qte.t++;   // smooth the countdown between snapshots
   if (mine && T % 4 === 0) {
-    const t = tanks[net.seat], sig = [r1(t.angle), r1(t.power), t.weapon, r1(t.x)].join();
-    if (sig !== net.lastIn && net.conn.open) { net.lastIn = sig; net.conn.send({t: 'in', a: t.angle, p: t.power, w: t.weapon, x: t.x}); }
+    const t = tanks[net.seat], sig = [r1(t.angle), r1(t.power), t.weapon, r1(t.x), t.armed].join();
+    if (sig !== net.lastIn && net.conn.open) { net.lastIn = sig; net.conn.send({t: 'in', a: t.angle, p: t.power, w: t.weapon, x: t.x, sp: t.armed}); }
   }
 }
 function pressCombo(k) {   // host/offline resolves a combo key, clients forward it to the host
@@ -1621,12 +1642,36 @@ function tryFire() {
   if (net && net.role === 'client') {
     const t = tanks[net.seat];
     if (!t || state !== 'aim' || turn !== net.seat || T - net.sentAt < 60) return;
-    net.sentAt = T; net.conn.send({t: 'fire', a: t.angle, p: t.power, w: t.weapon, x: t.x});
+    net.sentAt = T; net.conn.send({t: 'fire', a: t.angle, p: t.power, w: t.weapon, x: t.x, sp: t.armed});
   } else fire();
 }
 
 // ====================================================== drawing: world
+// The terrain (fill, texture, strata, scorches, caves, tunnels, surface rim) is painted into an offscreen canvas and
+// only repainted when something in it changes, which a cheap checksum over the height map detects. Only the swaying
+// grass tufts are drawn fresh every frame.
+let terrainCache = null, terrainCacheSig = NaN;
+function terrainSig() {
+  let s = themeIdx * 7919 + scorches.length * 31 + tunnels.length * 131;
+  for (let x = 0; x < WW; x++) s += ground[x] * ((x & 15) + 1) + veg[x] * ((x & 7) + 1);
+  if (scorches.length) { const l = scorches[scorches.length - 1]; s += l.x * 3 + l.y * 5; }
+  for (const tn of tunnels) s += tn.length * 17;
+  for (const c of caves) if (c.falling) s += Math.min(c.age, CAVE_FRAMES + 1) * ((c.x | 0) + 1);
+  return s;
+}
 function drawTerrain() {
+  if (!terrainCache) { terrainCache = document.createElement('canvas'); terrainCache.width = WW; terrainCache.height = WH; }
+  const sig = terrainSig();
+  if (sig !== terrainCacheSig) {
+    terrainCacheSig = sig;
+    const main = ctx; ctx = terrainCache.getContext('2d');
+    ctx.clearRect(0, 0, WW, WH); paintTerrain();
+    ctx = main;
+  }
+  ctx.drawImage(terrainCache, 0, 0);
+  drawTufts();
+}
+function paintTerrain() {
   ctx.save();
   ctx.beginPath(); ctx.moveTo(0, WH);
   for (let x = 0; x < WW; x++) ctx.lineTo(x + .5, ground[x]);
@@ -1657,6 +1702,8 @@ function drawTerrain() {
   top(); ctx.strokeStyle = shade(theme.dirt[0], .12); ctx.lineWidth = 3; ctx.stroke();
   vegTop(0); ctx.strokeStyle = theme.top; ctx.lineWidth = 6; ctx.stroke();
   vegTop(-1.5); ctx.strokeStyle = theme.grass; ctx.lineWidth = 2.6; ctx.stroke();
+}
+function drawTufts() {
   // tufts of grass / dry weeds that sway with the wind
   const sway = (mode === 'play' ? wind : 3) * .35;
   for (const [colr, off] of [[theme.top, 0], [theme.grass, 3]]) {
@@ -1845,24 +1892,26 @@ function drawShots() {
 }
 
 function drawParts() {
-  for (const p of parts) {
-    const t = p.life / p.max;
-    if (p.type === 'fire') {
-      ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = Math.min(1, t * 1.4);
-      ctx.fillStyle = `hsl(${12 + t * 42},100%,${40 + t * 22}%)`;
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (.35 + t), 0, TAU); ctx.fill();
-      ctx.globalCompositeOperation = 'source-over';
-    } else if (p.type === 'smoke') {
-      ctx.globalAlpha = t * .4; ctx.fillStyle = '#5b5d68';
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (1 + (1 - t) * 1.8), 0, TAU); ctx.fill();
-    } else if (p.type === 'spark') {
-      ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = t; ctx.strokeStyle = p.color || '#ffd27a'; ctx.lineWidth = p.size;
-      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 2.2, p.y - p.vy * 2.2); ctx.stroke();
-      ctx.globalCompositeOperation = 'source-over';
-    } else if (p.type === 'dirt') {
-      ctx.globalAlpha = Math.min(1, t * 3); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.size, p.size);
-    }
+  // drawn in passes by type so the blend mode changes a few times per frame, not once per particle
+  ctx.fillStyle = '#5b5d68';
+  for (const p of parts) if (p.type === 'smoke') {
+    const t = p.life / p.max; ctx.globalAlpha = t * .4;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (1 + (1 - t) * 1.8), 0, TAU); ctx.fill();
   }
+  for (const p of parts) if (p.type === 'dirt') {
+    ctx.globalAlpha = Math.min(1, p.life / p.max * 3); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.size, p.size);
+  }
+  ctx.globalCompositeOperation = 'lighter';
+  for (const p of parts) if (p.type === 'fire') {
+    const t = p.life / p.max; ctx.globalAlpha = Math.min(1, t * 1.4);
+    ctx.fillStyle = `hsl(${(12 + t * 42) | 0},100%,${(40 + t * 22) | 0}%)`;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (.35 + t), 0, TAU); ctx.fill();
+  }
+  for (const p of parts) if (p.type === 'spark') {
+    ctx.globalAlpha = p.life / p.max; ctx.strokeStyle = p.color || '#ffd27a'; ctx.lineWidth = p.size;
+    ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 2.2, p.y - p.vy * 2.2); ctx.stroke();
+  }
+  ctx.globalCompositeOperation = 'source-over';
   ctx.globalAlpha = 1;
   for (const r of rings) {
     const t = r.life / r.max;
@@ -1977,7 +2026,7 @@ function drawCards() {
     const x = x0 + i * (cw + gap), act = i === turn && state !== 'over' && state !== 'wheel' || (state === 'wheel' && i === turn);
     ctx.save();
     if (t.hp <= 0) ctx.globalAlpha = .45;
-    if (act) glow(t.color, 16);
+    if (act) halo(x, y, cw, h, 12, t.color);
     panel(x, y, cw, h, 12, act ? t.color : 'rgba(214,204,150,.26)', act ? 2.4 : 1.2);
     if (teamMode) { noGlow(); ctx.fillStyle = TEAMS[t.team].color; ctx.fillRect(x + 10, y + 3, cw - 20, 3); }   // team stripe
     noGlow();
@@ -1995,12 +2044,12 @@ function drawCards() {
     text(String(Math.max(0, Math.round(t.hp))), x + cw - 46, y + 33, 13, INK, 'left', '800');
     text('★'.repeat(Math.min(wins[i], 6)) + (wins[i] > 6 ? ' ×' + wins[i] : '') || '', x + 52, y + 51, 12, '#e2b93a', 'left', '700');
     if (!wins[i]) text('NO VICTORIES', x + 52, y + 51, 10, 'rgba(230,224,196,.32)', 'left', '700');
-    if (t.status && t.hp > 0) text(`${t.status.icon} ${t.status.name}`, x + cw - 46, y + 51, 10, t.status.color, 'right', '900');
-    if (t.special) {
-      const pulse = 1 + Math.sin(T * .15) * .08;
-      ctx.save(); glow(t.special.color, 14); ctx.fillStyle = t.special.color + '55';
-      ctx.beginPath(); ctx.arc(x + cw - 30, y + 50, 10 * pulse, 0, TAU); ctx.fill(); noGlow(); ctx.restore();
-      text(t.special.icon, x + cw - 30, y + 51, 13, '#fff', 'center');
+    const ns = t.hp > 0 ? Math.min(3, t.stock.length) : 0, stEnd = ns ? x + cw - 18 - ns * 18 - (t.stock.length > 3 ? 22 : 0) : x + cw - 46;
+    if (t.status && t.hp > 0) text(`${t.status.icon} ${t.status.name}`, stEnd, y + 51, 10, t.status.color, 'right', '900');
+    if (t.stock.length && t.hp > 0) {   // supply stockpile: the latest few specials, plus a count
+      const shown = t.stock.slice(-3), bx0 = x + cw - 14 - shown.length * 18;
+      shown.forEach((s, k) => { ctx.fillStyle = s.color + '55'; ctx.beginPath(); ctx.arc(bx0 + k * 18 + 9, y + 50, 8.5, 0, TAU); ctx.fill(); text(s.icon, bx0 + k * 18 + 9, y + 51, 11, '#fff', 'center'); });
+      if (t.stock.length > 3) text('+' + (t.stock.length - 3), bx0 - 4, y + 51, 10, INK, 'right', '900');
     }
     ctx.restore();
   });
@@ -2015,7 +2064,7 @@ function drawShotClock() {   // online: seconds left for a human's shot
 
 function drawControlPanel() {
   const t = tanks[turn], x = 90, w = W - 180, y0 = H + 6, h = 84, col = t.color;
-  ctx.save(); glow(col, 14); panel(x, y0, w, h, 16, col, 2); noGlow(); ctx.restore();
+  halo(x, y0, w, h, 16, col); panel(x, y0, w, h, 16, col, 2);
   // angle gauge
   const gx = 152, gy = y0 + 70, gr = 52;
   ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(255,255,255,.1)'; ctx.beginPath(); ctx.arc(gx, gy, gr - 6, Math.PI, TAU); ctx.stroke();
@@ -2051,28 +2100,33 @@ function drawControlPanel() {
   // weapons
   const sx = 540, sy = y0 + 12, sw2 = 70, sh = 60, step = 74;
   WEAPONS.forEach((wp, i) => {
-    const x2 = sx + i * step, sel = t.weapon === i && !t.special, empty = t.ammo[i] <= 0;
-    ctx.save(); if (sel) glow(wp.color, 12);
+    const x2 = sx + i * step, armed = armedSpecial(t), sel = t.weapon === i && !armed, empty = t.ammo[i] <= 0;
     rr(x2, sy, sw2, sh, 10); ctx.fillStyle = sel ? 'rgba(255,255,255,.14)' : 'rgba(255,255,255,.05)'; ctx.fill();
-    ctx.strokeStyle = sel ? wp.color : 'rgba(255,255,255,.14)'; ctx.lineWidth = sel ? 2 : 1; ctx.stroke(); ctx.restore();
-    ctx.globalAlpha = empty ? .3 : t.special ? .55 : 1;
+    ctx.strokeStyle = sel ? wp.color : 'rgba(255,255,255,.14)'; ctx.lineWidth = sel ? 2.4 : 1; ctx.stroke();
+    ctx.globalAlpha = empty ? .3 : armed ? .55 : 1;
     text(wp.icon, x2 + sw2 / 2, sy + 24, 22, '#fff', 'center');
     text(wp.name, x2 + sw2 / 2, sy + 46, 11, '#fff', 'center', '700');
     text('[' + (i + 1) + ']', x2 + 8, sy + 10, 10, 'rgba(255,255,255,.6)', 'left', '700');
     text(wp.ammo === Infinity ? '∞' : '×' + t.ammo[i], x2 + sw2 - 8, sy + 10, 11, '#fff', 'right', '800');
     ctx.globalAlpha = 1;
   });
-  const x3 = sx + WEAPONS.length * step + 2, sp = t.special;
-  ctx.save(); if (sp) glow(sp.color, 14 + Math.sin(T * .15) * 5);
-  rr(x3, sy, 96, sh, 10); ctx.fillStyle = sp ? sp.color + '33' : 'rgba(255,255,255,.03)'; ctx.fill();
-  ctx.strokeStyle = sp ? sp.color : 'rgba(255,255,255,.12)'; ctx.lineWidth = sp ? 2 : 1; ctx.setLineDash(sp ? [] : [4, 4]); ctx.stroke(); ctx.restore();
-  if (sp) { text(sp.icon, x3 + 48, sy + 24, 22, '#fff', 'center'); text(sp.short || sp.name, x3 + 48, sy + 46, 11, '#fff', 'center', '800'); text('SUPPLY', x3 + 8, sy + 10, 9, sp.color, 'left', '800'); }
-  else { text('SUPPLY', x3 + 48, sy + 22, 11, 'rgba(230,224,196,.3)', 'center', '800'); text('earned by hits', x3 + 48, sy + 42, 10, 'rgba(230,224,196,.3)', 'center'); }
+  // supply stockpile: Q (or a click) cycles through the specials; the armed one replaces your weapon for this shot
+  const x3 = sx + WEAPONS.length * step + 2, sp = armedSpecial(t), n = t.stock.length, show = sp || t.stock[0];
+  rr(x3, sy, 96, sh, 10); ctx.fillStyle = sp ? sp.color + '40' : 'rgba(255,255,255,.03)'; ctx.fill();
+  ctx.strokeStyle = sp ? sp.color : n ? show.color + '99' : 'rgba(255,255,255,.12)'; ctx.lineWidth = sp ? 2.6 : 1.2; ctx.setLineDash(n ? [] : [4, 4]); ctx.stroke(); ctx.setLineDash([]);
+  if (sp) {
+    text(sp.icon, x3 + 48, sy + 25, 22, '#fff', 'center'); text(sp.short || sp.name, x3 + 48, sy + 47, 11, '#fff', 'center', '900');
+    text('[Q] ARMED', x3 + 8, sy + 10, 9, sp.color, 'left', '900'); text(`${t.armed + 1}/${n}`, x3 + 88, sy + 10, 10, '#fff', 'right', '800');
+  } else if (n) {
+    ctx.globalAlpha = .55; text(show.icon, x3 + 48, sy + 26, 20, '#fff', 'center'); ctx.globalAlpha = 1;
+    text('SUPPLY', x3 + 8, sy + 10, 9, INK_DIM, 'left', '800'); text('×' + n, x3 + 88, sy + 10, 11, '#fff', 'right', '900');
+    text('Q to arm', x3 + 48, sy + 48, 10, INK_DIM, 'center', '800');
+  } else { text('SUPPLY', x3 + 48, sy + 22, 11, 'rgba(230,224,196,.3)', 'center', '800'); text('earned by hits', x3 + 48, sy + 42, 10, 'rgba(230,224,196,.3)', 'center'); }
   // fire button
   const mineT = isMine(t) && !t.ai;
   const fx = x + w - 92, ready = state === 'aim' && mineT, p = ready ? 1 + Math.sin(T * .12) * .03 : 1;
   ctx.save(); ctx.translate(fx + 40, sy + 30); ctx.scale(p, p);
-  if (ready) glow(col, 14);
+  if (ready) halo(-40, -30, 80, 60, 12, col);
   rr(-40, -30, 80, 60, 12); ctx.fillStyle = ready ? col : 'rgba(255,255,255,.08)'; ctx.fill(); noGlow();
   if (ready) { hazard(-40, -30, 80, 8, .9); hazard(-40, 22, 80, 8, .9); }   // warning stripes on an armed trigger
   text(t.ai ? 'CPU' : mineT ? 'FIRE' : 'WAIT', 0, -6, 17, ready ? inkOn(col) : 'rgba(255,255,255,.45)', 'center', '900');
@@ -2085,7 +2139,8 @@ function drawControlPanel() {
       t.angle = clamp(a < 0 ? (mx < gx ? 180 : 0) : a, 0, 180);
     }});
     uiButtons.push({x: px - 6, y: y0 + 22, w: pw + 12, h: 32, drag: mx => { t.power = clamp(Math.round((mx - px) / pw * 100), 5, 100); }});
-    WEAPONS.forEach((wp, i) => uiButtons.push({x: sx + i * step, y: sy, w: sw2, h: sh, tap: () => { if (t.ammo[i] > 0) { t.weapon = i; sfx.click(); } }}));
+    WEAPONS.forEach((wp, i) => uiButtons.push({x: sx + i * step, y: sy, w: sw2, h: sh, tap: () => { if (t.ammo[i] > 0) { t.weapon = i; t.armed = -1; sfx.click(); } }}));
+    uiButtons.push({x: x3, y: sy, w: 96, h: sh, tap: () => cycleSupply(t)});
     uiButtons.push({x: fx, y: sy, w: 80, h: 60, tap: () => { if (state === 'aim') tryFire(); }});
   }
 }
@@ -2128,7 +2183,7 @@ function drawInfoCard() {
   panel(x, y, w, h, 10);
   // controls (two rows of key chips)
   const rows = [[['← →', 'Aim'], ['↑ ↓', 'Power'], ['Shift', 'Fine'], ['A D', 'Drive'], ['1-4', 'Weapon'], ['Space', 'Fire']],
-                [['A S D F', 'Auth code'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
+                [['A S D F', 'Auth code'], ['Q', 'Supply'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
   rows.forEach((row, r) => {
     let cx = x + 12; const cy = y + 14 + r * 20;
     for (const [k, d] of row) {
@@ -2163,7 +2218,7 @@ function drawInfoPopup() {
   rr(px + 22, py + 22, 72, 72, 14); ctx.fillStyle = w.color + '44'; ctx.fill(); ctx.strokeStyle = w.color; ctx.lineWidth = 2; ctx.stroke();
   text(w.icon, px + 58, py + 60, 40, '#fff', 'center');
   text(w.name.toUpperCase(), px + 112, py + 44, 28, INK, 'left', '900');
-  const kind = a.special ? 'SUPPLY-DROP SPECIAL  ·  ONE USE' : w.ammo === Infinity ? 'STANDARD WEAPON  ·  UNLIMITED' : `STANDARD WEAPON  ·  ${w.ammo} PER ROUND`;
+  const kind = a.special ? 'SUPPLY-DROP SPECIAL  ·  ONE USE  ·  STOCKPILED' : w.ammo === Infinity ? 'STANDARD WEAPON  ·  UNLIMITED' : `STANDARD WEAPON  ·  ${w.ammo} PER ROUND`;
   text(kind, px + 112, py + 74, 12, w.color, 'left', '900');
   const desc = w.status ? STATUS_INFO(w.status) : (AMMO_INFO[w.short || w.name] || w.desc);
   wrapText(desc, pw - 44, 15).forEach((ln, i) => text(ln, px + 22, py + 124 + i * 21, 15, INK, 'left', '600'));
@@ -2176,7 +2231,7 @@ function drawInfoPopup() {
     rr(sx, sy, sw, 44, 8); ctx.fillStyle = 'rgba(255,255,255,.07)'; ctx.fill();
     text(k, sx + sw / 2, sy + 13, 9.5, INK_DIM, 'center', '800'); text(v, sx + sw / 2, sy + 31, 15, INK, 'center', '900');
   });
-  text(a.special ? 'Earned by landing a hit, entering the auth code and spinning the supply-drop wheel.' : 'Select with the number keys 1–3 or click its slot in the control panel.',
+  text(a.special ? 'Won on the supply-drop wheel and kept in your stockpile. Press Q (or click SUPPLY) to arm it.' : 'Select with the number keys 1–4 or click its slot in the control panel.',
        px + pw / 2, py + 270, 11, INK_DIM, 'center', '700');
   text('click anywhere or press Esc to close', px + pw / 2, py + ph + 18, 11, INK_DIM, 'center', '700', 'rgba(0,0,0,.6)');
 }
@@ -2264,7 +2319,7 @@ function drawWheel() {
     glow(sp.color, 22); panel(-250, -34, 500, 68, 20, sp.color, 3); noGlow();
     text(sp.icon, -212, 2, 34, '#fff', 'center');
     text(sp.name, -178, -10, 24, '#fff', 'left', '900');
-    text(sp.desc + ' — loaded for your next shot', -178, 16, 13, 'rgba(255,255,255,.75)', 'left', '600');
+    text(sp.desc + ' — added to your stockpile (Q to arm)', -178, 16, 13, 'rgba(255,255,255,.75)', 'left', '600');
     ctx.restore();
   }
 }
@@ -2295,7 +2350,20 @@ const TYPE = '"Courier New",Courier,"Lucida Console",monospace', PAPER_INK = '#2
 function ttext(s, x, y, size, color = PAPER_INK, align = 'left', weight = '700') {
   ctx.font = `${weight} ${size}px ${TYPE}`; ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.fillStyle = color; ctx.fillText(s, x, y);
 }
+// paper sheets (with their soft shadow) are rendered once per size/seed/lift and reused: shadows every frame are costly
+const paperSprites = new Map();
 function paper(x, y, w, h, seed = 1, lift = 0) {
+  const key = `${w}|${h}|${seed}|${lift}`, m = 24;
+  let spr = paperSprites.get(key);
+  if (!spr) {
+    spr = document.createElement('canvas'); spr.width = Math.ceil((w + m * 2) * S); spr.height = Math.ceil((h + m * 2) * S);
+    const main = ctx; ctx = spr.getContext('2d'); ctx.setTransform(S, 0, 0, S, 0, 0);
+    paintPaper(m, m, w, h, seed, lift);
+    ctx = main; paperSprites.set(key, spr);
+  }
+  ctx.drawImage(spr, x - m, y - m, w + m * 2, h + m * 2);
+}
+function paintPaper(x, y, w, h, seed, lift) {
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 12 + lift * 3; ctx.shadowOffsetX = 2 + lift; ctx.shadowOffsetY = 4 + lift * 2;
   const g = ctx.createLinearGradient(x, y, x + w * .3, y + h);
@@ -2456,7 +2524,7 @@ function drawArmory() {
   }
   loadout.forEach((p, i) => {
     const px = x0 + i * (pw + gap), M = TANKS[p.model], mine = canEditSeat(i), focus = !net && i === armoryFocus && !p.cpu;
-    ctx.save(); if (focus || (net && i === net.seat)) glow(p.color, 18);
+    ctx.save(); if (focus || (net && i === net.seat)) halo(px, py, pw, ph, 16, p.color);
     panel(px, py, pw, ph, 16, p.ready ? '#9cc255' : (focus || (net && i === net.seat)) ? p.color : 'rgba(214,204,150,.3)', p.ready || focus ? 2.4 : 1.4);
     noGlow(); ctx.restore();
     if (!net && !p.cpu) menuButtons.push({x: px, y: py, w: pw, h: 40, action: () => { armoryFocus = i; }});   // click a header to focus (hot-seat)
@@ -2495,18 +2563,19 @@ function drawArmory() {
     };
     bar('ARMOR', M.hp, HP_RANGE[0], HP_RANGE[1], py + 248, String(M.hp));
     bar('MOBILITY', M.fuel, FUEL_RANGE[0], FUEL_RANGE[1], py + 268, String(M.fuel));
+    bar('ATTACK', M.atk, ATK_RANGE[0], ATK_RANGE[1], py + 288, M.atk + '%');
     // colours
-    text('COLOUR', px + 16, py + 296, 10, INK_DIM, 'left', '800');
+    text('COLOUR', px + 16, py + 312, 10, INK_DIM, 'left', '800');
     const taken = takenColors(i), sz = 24, sg = Math.min(8, (pw - 32 - 6 * sz) / 5), sx0 = px + (pw - (6 * sz + 5 * sg)) / 2;
     PALETTE.forEach((c, k) => {
-      const cx = sx0 + (k % 6) * (sz + sg), cy = py + 308 + Math.floor(k / 6) * (sz + 8), sel = c === p.color, gone = taken.includes(c);
+      const cx = sx0 + (k % 6) * (sz + sg), cy = py + 322 + Math.floor(k / 6) * (sz + 6), sel = c === p.color, gone = taken.includes(c);
       rr(cx, cy, sz, sz, 6); ctx.fillStyle = c; ctx.globalAlpha = gone ? .25 : 1; ctx.fill(); ctx.globalAlpha = 1;
       ctx.strokeStyle = sel ? '#fff' : 'rgba(0,0,0,.5)'; ctx.lineWidth = sel ? 2.5 : 1; ctx.stroke();
       if (gone) { ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(cx + 5, cy + 5); ctx.lineTo(cx + sz - 5, cy + sz - 5); ctx.stroke(); }
       if (mine && !gone) menuButtons.push({x: cx, y: cy, w: sz, h: sz, action: () => requestPick(i, {color: c})});
     });
     // ready
-    const ry = py + 384;
+    const ry = py + 392;
     if (p.cpu) { rr(px + 14, ry, pw - 28, 46, 10); ctx.fillStyle = 'rgba(156,194,85,.25)'; ctx.fill(); text('CPU — READY', px + pw / 2, ry + 24, 16, '#9cc255', 'center', '900'); }
     else if (mine) { if (smallBtn(px + 14, ry, pw - 28, 46, p.ready ? '✓ READY' : 'READY', p.ready ? '#9cc255' : p.color, () => requestPick(i, {ready: !p.ready}), p.ready)) any = true; }
     else { rr(px + 14, ry, pw - 28, 46, 10); ctx.fillStyle = p.ready ? 'rgba(156,194,85,.25)' : 'rgba(255,255,255,.06)'; ctx.fill();
@@ -2610,7 +2679,9 @@ function renderTitle() {
     const cx = x0 + g.measureText(GAME_NAME.slice(0, i)).width + (g.measureText(GAME_NAME[i]).width - 9) / 2;
     g.fillRect(cx - 1.6, 14, 3.2, h - 28);
   }
-  titleCanvas = c;
+  const c2 = document.createElement('canvas'); c2.width = c.width; c2.height = c.height;   // bake the drop shadow in once
+  const g2 = c2.getContext('2d'); g2.shadowColor = 'rgba(0,0,0,.75)'; g2.shadowBlur = 16 * S; g2.drawImage(c, 0, 0);
+  titleCanvas = c2;
 }
 function roundel(x, y, r) {   // white star in a dark-blue disc
   ctx.fillStyle = '#e9e1c6'; ctx.beginPath(); ctx.arc(x, y, r + 3, 0, TAU); ctx.fill();
@@ -2635,7 +2706,7 @@ function drawPosterHeader() {
   try { ctx.letterSpacing = '4px'; } catch (e) {}
   text('★  WAR DEPARTMENT  ·  THEATRE OF OPERATIONS  ·  1944  ★', W / 2, 24, 12, '#e9dcb4', 'center', '800', 'rgba(20,14,6,.85)');
   try { ctx.letterSpacing = '0px'; } catch (e) {}
-  ctx.save(); glow('rgba(0,0,0,.75)', 16); ctx.drawImage(titleCanvas, W / 2 - 450, 83 - 60, 900, 120); ctx.restore();
+  ctx.drawImage(titleCanvas, W / 2 - 450, 83 - 60, 900, 120);
   const rx = titleWidth / 2 + 58;
   roundel(W / 2 - rx, 84, 24); roundel(W / 2 + rx, 84, 24);
   ribbon(W / 2 - 250, 138, 500, 30, 'ARMORED ARTILLERY COMMAND');
@@ -2821,7 +2892,8 @@ addEventListener('keydown', e => {
   if (state === 'aim' && !t.ai && isMine(t)) {
     if (k === ' ' && !e.repeat) tryFire();
     const n = '1234'.indexOf(k);
-    if (n >= 0 && k.length === 1 && t.ammo[n] > 0) { t.weapon = n; sfx.click(); }
+    if (n >= 0 && k.length === 1 && t.ammo[n] > 0) { t.weapon = n; t.armed = -1; sfx.click(); }
+    if (k === 'q' && !e.repeat) cycleSupply(t);   // arm the next special in the stockpile
   }
 });
 addEventListener('paste', e => {
