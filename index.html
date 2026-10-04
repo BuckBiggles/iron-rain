@@ -259,6 +259,15 @@ const MAPS = [
                 return x => { let y = WH * .7 + h(x); for (const [a, b, ht] of mesas) if (x >= a && x <= b) y -= ht; return y; }; }},
 ];
 let mapIdx = 0;
+// CPU difficulty, picked in the armory by the local player / online host (the host runs every CPU, so it only matters there)
+const CPU_LEVELS = [
+  {name: 'EASY',   color: '#9cc255', err: 12,  combo: .40, drill: false, spend: .25},
+  {name: 'NORMAL', color: '#d4a417', err: 5,   combo: .70, drill: true,  spend: .65},
+  {name: 'HARD',   color: '#e07b39', err: 2.5, combo: .85, drill: true,  spend: .75},
+  {name: 'EXPERT', color: '#d6492f', err: 1.2, combo: .95, drill: true,  spend: .90},
+];
+let cpuLevel = 1;
+const cpuL = () => CPU_LEVELS[cpuLevel] || CPU_LEVELS[1];
 function makeTerrain(mi = mapIdx) {
   ground = new Float32Array(WW);
   const f = MAPS[mi].gen();
@@ -1316,7 +1325,7 @@ function aiThink(t) {
     return false;
   });
   const overCave = targets.some(o => caves.some(c => !c.falling && Math.abs(o.x - c.x) < c.w));
-  if (t.ammo[3] > 0 && (best.d > 30 || behindCover || overCave)) {
+  if (cpuL().drill && t.ammo[3] > 0 && (best.d > 30 || behindCover || overCave)) {
     for (let a = frozen ? aLo : 4; a <= (frozen ? aHi : 176); a += 3) for (let p = 20; p <= 100; p += 3) {
       const r = simulateDrill(m.x, m.y, a, p * mult, wind, t.i);
       if (!r || allies.some(o => Math.abs(r.x - o.x) < 70)) continue;
@@ -1329,7 +1338,7 @@ function aiThink(t) {
                              || (drill.d < 18 && behindCover && Math.random() < .5) // punch through the hill they hide behind
                              || (drill.cave && Math.random() < .45));               // or cave the ground in under them
   if (useDrill) best = drill;
-  const err = useDrill ? 3 : 5;   // a drill line is less forgiving, so the CPU aims it more carefully
+  const err = cpuL().err * (useDrill ? .6 : 1);   // difficulty sets the aim error; a drill line is less forgiving, so it's aimed more carefully
   aiPlan = {a: best.a + rnd(-err, err), p: Math.round(clamp(best.p + rnd(-err, err), 20, 100)), weapon: useDrill ? 3 : 0};
   if (frozen) aiPlan.a = t.angle;
   if (!useDrill) {
@@ -1339,7 +1348,7 @@ function aiThink(t) {
   t.weapon = aiPlan.weapon;
   // supply stockpile: usually spend one (a random pick, but never Teleport, which would warp the CPU into the enemy)
   const usable = t.stock.map((s, k) => s.kind === 'teleport' ? -1 : k).filter(k => k >= 0);
-  t.armed = usable.length && !useDrill && Math.random() < .65 ? pick(usable) : -1;
+  t.armed = usable.length && !useDrill && Math.random() < cpuL().spend ? pick(usable) : -1;
 }
 // where would a drill shot end up? Same rules as drillStep: fly, bore straight, break out and fly on, stop at a tank or cave
 function simulateDrill(sx, sy, angle, power, windv, self) {
@@ -1572,7 +1581,7 @@ function updateGame() {
     const q = qte;
     if (!q.done) {
       q.t++;
-      if (tanks[turn].ai && !q.ai) q.ai = {next: 24, failAt: Math.random() < .7 ? -1 : Math.floor(rnd(1, 4))};   // CPU nails it ~70% of the time
+      if (tanks[turn].ai && !q.ai) q.ai = {next: 24, failAt: Math.random() < cpuL().combo ? -1 : Math.floor(rnd(1, 4))};   // how often the CPU nails it depends on difficulty
       if (q.ai && --q.ai.next <= 0) { qteKey(q.idx === q.ai.failAt ? 'x' : q.seq[q.idx]); q.ai.next = Math.floor(rnd(12, 22)); }
       if (!q.done && q.t > q.limit) qteEnd(false, 'TIMED OUT!');
     } else if (++q.resT > 55) { qte = null; if (q.ok) startWheel(); else endShot(); }
@@ -1785,7 +1794,7 @@ function clientData(m) {
     case 'full': fail2(m.why); break;
     case 'lobby': net.occ = m.occ; numPlayers = m.np; break;
     case 'round': startClientRound(m); break;
-    case 'arm': loadout = m.p; armoryGo = m.go || 0; teamMode = !!m.tm; if (Number.isInteger(m.mp) && MAPS[m.mp]) mapIdx = m.mp; if (mode !== 'armory') { mode = 'armory'; menuButtons = []; } break;
+    case 'arm': loadout = m.p; armoryGo = m.go || 0; teamMode = !!m.tm; if (Number.isInteger(m.mp) && MAPS[m.mp]) mapIdx = m.mp; if (CPU_LEVELS[m.cl]) cpuLevel = m.cl; if (mode !== 'armory') { mode = 'armory'; menuButtons = []; } break;
     case 's': applySnap(m); break;
   }
 }
@@ -2712,7 +2721,12 @@ function cycleColor(i, dir) {
   for (let n = 0; n < PALETTE.length; n++) { k = (k + dir + PALETTE.length) % PALETTE.length; if (!taken.includes(PALETTE[k])) return PALETTE[k]; }
   return p.color;
 }
-function bcastArmory() { bcast({t: 'arm', p: loadout, go: armoryGo, tm: teamMode, mp: mapIdx}); }
+function bcastArmory() { bcast({t: 'arm', p: loadout, go: armoryGo, tm: teamMode, mp: mapIdx, cl: cpuLevel}); }
+function setCpuLevel(i) {        // local player or online host only
+  if (net && net.role !== 'host') return;
+  cpuLevel = ((i % CPU_LEVELS.length) + CPU_LEVELS.length) % CPU_LEVELS.length; sfx.click();
+  if (net) bcastArmory();
+}
 function setMap(i) {             // local player or online host only
   if (net && net.role !== 'host') return;
   mapIdx = ((i % MAPS.length) + MAPS.length) % MAPS.length; sfx.click();
@@ -2754,6 +2768,14 @@ function drawArmory() {
                 : 'Pick a tank and a colour, then hit READY. CPU units are assigned at random.', W / 2, 72, 13, INK_DIM, 'center', '700');
   const n = loadout.length, gap = 14, pw = Math.min(255, (W - 60 - gap * (n - 1)) / n), x0 = (W - (pw * n + gap * (n - 1))) / 2, py = 92, ph = 468;
   let any = drawMapPicker(!net || net.role === 'host');
+  if (loadout.some(p => p.cpu)) {   // CPU difficulty, under the mode switch (or in its place with 2 tanks)
+    const canSet = !net || net.role === 'host', mx = W - 252, my = n >= 3 ? 64 : 30, L = cpuL();
+    text('CPU', mx - 8, my + 11, 10, INK_DIM, 'right', '800');
+    if (canSet && smallBtn(mx, my, 30, 22, '◀', L.color, () => setCpuLevel(cpuLevel - 1), false)) any = true;
+    rr(mx + 34, my, 160, 22, 6); ctx.fillStyle = L.color; ctx.fill();
+    text(L.name, mx + 114, my + 12, 12, '#15160f', 'center', '900');
+    if (canSet && smallBtn(mx + 198, my, 30, 22, '▶', L.color, () => setCpuLevel(cpuLevel + 1), false)) any = true;
+  }
   if (n >= 3) {   // game mode switch: Free-for-all / Teams (local player or online host decides)
     const canSet = !net || net.role === 'host', mx = W - 252, my = 30;
     text('MODE', mx - 8, my + 15, 10, INK_DIM, 'right', '800');
@@ -2817,7 +2839,7 @@ function drawArmory() {
     });
     // ready
     const ry = py + 392;
-    if (p.cpu) { rr(px + 14, ry, pw - 28, 46, 10); ctx.fillStyle = 'rgba(156,194,85,.25)'; ctx.fill(); text('CPU — READY', px + pw / 2, ry + 24, 16, '#9cc255', 'center', '900'); }
+    if (p.cpu) { rr(px + 14, ry, pw - 28, 46, 10); ctx.fillStyle = 'rgba(156,194,85,.25)'; ctx.fill(); text(`CPU · ${cpuL().name} — READY`, px + pw / 2, ry + 24, 15, cpuL().color, 'center', '900'); }
     else if (mine) { if (smallBtn(px + 14, ry, pw - 28, 46, p.ready ? '✓ READY' : 'READY', p.ready ? '#9cc255' : p.color, () => requestPick(i, {ready: !p.ready}), p.ready)) any = true; }
     else { rr(px + 14, ry, pw - 28, 46, 10); ctx.fillStyle = p.ready ? 'rgba(156,194,85,.25)' : 'rgba(255,255,255,.06)'; ctx.fill();
            text(p.ready ? '✓ READY' : 'CHOOSING…', px + pw / 2, ry + 24, 16, p.ready ? '#9cc255' : INK_DIM, 'center', '900'); }
@@ -2826,7 +2848,7 @@ function drawArmory() {
   const all = loadout.every(p => p.ready);
   if (all && !teamsValid()) text('⚠ BOTH TEAMS NEED AT LEAST ONE TANK — someone switch sides', W / 2, 586, 15, '#fca5a5', 'center', '900', 'rgba(0,0,0,.6)');
   else if (all) { ctx.save(); glow('#9cc255', 20); panel(W / 2 - 200, 566, 400, 40, 12, '#9cc255', 2); noGlow(); ctx.restore(); text('ALL UNITS READY — DEPLOYING…', W / 2, 587, 17, '#9cc255', 'center', '900'); }
-  else text('←/→ tank  ·  ↑/↓ colour' + (teamMode ? '  ·  T team' : '') + (!net || net.role === 'host' ? '  ·  N map' + (n >= 3 ? '  ·  G mode' : '') : '') +
+  else text('←/→ tank  ·  ↑/↓ colour' + (teamMode ? '  ·  T team' : '') + (!net || net.role === 'host' ? '  ·  N map  ·  C cpu' + (n >= 3 ? '  ·  G mode' : '') : '') +
             '  ·  Enter ready' + (net ? '  ·  Esc leave' : '  ·  Tab next player  ·  Esc back'), W / 2, 586, 13, INK_DIM, 'center', '700', 'rgba(0,0,0,.6)');
   if (smallBtn(16, 568, 150, 36, net ? (net.role === 'host' ? '◀ CLOSE ROOM' : '◀ LEAVE') : '◀ BACK', '#c0583d', armoryBack, false)) any = true;
   cv.style.cursor = any ? 'pointer' : 'default';
@@ -3092,6 +3114,7 @@ addEventListener('keydown', e => {
     }
     if (k === 'g' && loadout.length >= 3) { setTeamMode(!teamMode); return; }   // game mode (local player / host)
     if (k === 'n') { setMap(mapIdx + (e.shiftKey ? -1 : 1)); return; }           // map (local player / host)
+    if (k === 'c') { setCpuLevel(cpuLevel + (e.shiftKey ? -1 : 1)); return; }   // CPU difficulty (local player / host)
     const i = net ? net.seat : armoryFocus;
     if (!canEditSeat(i)) return;
     const p = loadout[i];

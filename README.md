@@ -5,6 +5,8 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
 **Play:** https://buckbiggles.github.io/iron-rain/
 
 - 2–4 tanks, any mix of humans and CPU opponents, on a huge battlefield
+- **CPU difficulty** (picked in the armory, ◀ ▶ or C): Easy, Normal, Hard or Expert — sharper aim, surer auth codes,
+  and smarter use of drills and supply specials as it goes up
 - **5 maps** (the host picks in the armory, ▲/▼ or N): Rolling Hills, Mountain Pass, The Gorge, Steppe, Badlands
 - Spawn points are random, except 1v1 and 2v2, which use fixed, tested positions
 - WWII skies: fighters dogfight and bombers drone over in the background
@@ -53,5 +55,5 @@ The control panel and a controls + ammo card sit in a strip below the battlefiel
 | Enter / E | After your shot: end your turn (or just drive until the fuel runs out) |
 | W A S D | After a hit: press the 4 keys shown (W, A, S, D in a random order) within 3 s |
 | T / M / P | Aim assist / sound / pause (offline only) |
-| Armory | ←/→ tank, ↑/↓ colour, Enter ready, Tab next player (hot-seat) — or click |
+| Armory | ←/→ tank, ↑/↓ colour, Enter ready, Tab next player (hot-seat), N map, C CPU difficulty, G mode — or click |
 | Esc | Menu / leave room |
