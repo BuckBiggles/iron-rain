@@ -9,6 +9,8 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
   Rhino, Scorpion, Kodiak — each trading armor against mobility) and a colour, then hits READY. CPUs pick at random.
 - **Online multiplayer:** host a room, share the invite link or 5-letter code, friends join from their own browsers
 - Local hot-seat play on one screen is still there too
+- **Teams mode** (3–4 tanks): in the armory switch FREE-FOR-ALL → TEAMS and pick ALPHA or BRAVO; CPUs fill the smaller side.
+  Last team standing wins and every member scores. Friendly fire hurts, but only hits on enemies earn a supply drop.
 - Ground that behaves like loose sand: steep slopes slump, craters cave in, dirt piles spread into dunes
 - Wind, and three weapons (Missile, Big Bomb, Triple)
 - Land a hit, then nail a 2-second W-A-S-D key combo to spin the supply-drop wheel for a one-shot special:
