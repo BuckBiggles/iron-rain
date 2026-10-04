@@ -424,8 +424,40 @@ function tiltAt(x) {
   const i0 = clamp(Math.floor(x - 11), 0, WW - 1), i1 = clamp(Math.floor(x + 11), 0, WW - 1);
   return Math.atan2(ground[i1] - ground[i0], Math.max(1, i1 - i0));
 }
-function newTank(i, slotIdx = i) {
-  const slot = WW / numPlayers, x = slot * slotIdx + rnd(slot * 0.3, slot * 0.7);
+// ---- spawn points. Layouts are fractions of the map width, left to right (teams: Alpha's slots first, on the left).
+// Each tank then takes the flattest nearby spot (no cliffs or pits) and the ground is levelled into a pad under it.
+// Chosen from CPU-vs-CPU simulations (win rate per slot, reachability across winds, pace, friendly fire):
+//   FFA 2: 25/75% keeps the enemy in range in every wind.  FFA 4: inner pair pushed apart so each inner tank's
+//   nearest threat is its outer neighbour (best inner-seat win share).  2v2: fastest, least friendly fire.
+//   3v1: farthest solo position (3v1 is unwinnable for the solo whatever the spawn).  3-tank layouts not tuned yet.
+const SPAWNS = {ffa: {2: [.25, .75], 3: [.15, .5, .85], 4: [.08, .28, .72, .92]},
+                teams: {'2v1': [.12, .3, .82], '2v2': [.14, .34, .66, .86], '3v1': [.05, .19, .33, .93]}};
+function spawnLayout() {
+  if (!teamMode || !loadout) return SPAWNS.ffa[numPlayers];
+  const a = loadout.filter(p => p.team === 0).length, b = numPlayers - a;
+  const base = SPAWNS.teams[a >= b ? `${a}v${b}` : `${b}v${a}`] || SPAWNS.ffa[numPlayers];
+  return a >= b ? base : base.map(f => 1 - f).reverse();   // smaller Alpha: mirror so Alpha still starts on the left
+}
+function placeSpawn(fx, reach = 70, lift = 0) {
+  const cx = fx * WW, g = i => ground[clamp(Math.round(i), 0, WW - 1)];
+  let best = cx, bestScore = Infinity;
+  for (let x = Math.max(40, cx - reach); x <= Math.min(WW - 40, cx + reach); x += 3) {
+    const slope = Math.abs(g(x + 14) - g(x - 14));
+    const pit = Math.max(0, g(x) - Math.min(g(x - 45), g(x + 45)) - 12);   // sitting in a hole blocks your own shots
+    const score = slope + pit * .6 + Math.abs(x - cx) * .02;
+    if (score < bestScore) { bestScore = score; best = x; }
+  }
+  let level = 0; for (let k = -12; k <= 12; k++) level += g(best + k); level = level / 25 - lift;   // lift > 0 builds a raised firebase
+  const ramp = 24 + lift * 1.6;
+  for (let px = Math.round(best - 18 - ramp); px <= Math.round(best + 18 + ramp); px++) {   // level pad with a smooth ramp at the edges
+    if (px < 0 || px >= WW) continue;
+    const d = Math.abs(px - best), k = d <= 18 ? 1 : Math.max(0, 1 - (d - 18) / ramp), s = k * k * (3 - 2 * k);
+    ground[px] = lerp(ground[px], level, s);
+  }
+  return best;
+}
+function newTank(i, x) {
+  if (x == null) { const slot = WW / numPlayers; x = slot * i + rnd(slot * 0.3, slot * 0.7); }
   const lo = loadout && loadout[i], model = lo ? lo.model : 0, M = TANKS[model];
   return {i, x, y: ground[Math.floor(x)] - 4, model, team: lo && lo.team != null ? lo.team : i % 2, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: x < WW / 2 ? 55 : 125, power: 55, weapon: 0,
           ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color: lo ? lo.color : COLORS[i], vy: 0, special: null, ai: net ? !net.occ[i] : i >= numHumans,
@@ -434,9 +466,11 @@ function newTank(i, slotIdx = i) {
 function startRound() {
   makeScene();
   // teams deploy side by side: Alpha on the left, Bravo on the right
-  const order = Array.from({length: numPlayers}, (_, i) => i);
-  if (teamMode && loadout) order.sort((a, b) => loadout[a].team - loadout[b].team || a - b);
-  tanks = Array.from({length: numPlayers}, (_, i) => newTank(i, order.indexOf(i)));
+  const order = shuffled(Array.from({length: numPlayers}, (_, i) => i));   // rotate who gets which spawn every round
+  if (teamMode && loadout) order.sort((a, b) => loadout[a].team - loadout[b].team);   // Alpha left, Bravo right; random within each team
+  const xs = spawnLayout().map(s => typeof s === 'number' ? placeSpawn(s) : placeSpawn(s.f, 70, s.lift || 0));
+  for (let k = 0; k < 300 && sandStep(false) > .01; k++);   // let the sand settle around the new pads
+  tanks = Array.from({length: numPlayers}, (_, i) => newTank(i, xs[order.indexOf(i)]));
   shots = []; parts = []; rings = []; flashes = []; popups = []; pending = []; wheel = null; winner = -1; winTeam = -1; evq = [];
   strikes = []; beams = []; uiParts = [];
   hit = [false, false, false, false]; shake = 0; whiteFlash = 0; paused = false; terrainDirty = false; sandActive = false;
