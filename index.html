@@ -80,28 +80,28 @@ const PALETTE = ['#86a64a', '#d4a95c', '#6f93b3', '#c0583d', '#5d7a3a', '#8f8f86
 // the 8 tanks in the armory: same physics footprint, different looks plus an armor-vs-mobility trade-off.
 // Coordinates are in tank space (ground contact at y = 0, gun pivot at y = -22).
 const TANKS = [
-  {name:'WARHOUND', role:'Main battle tank', hp:200, fuel:60, atk:100, wheels:5, wheelR:3.7,
+  {name:'WARHOUND', role:'Main battle tank', hp:210, fuel:60, atk:100, wheels:5, wheelR:3.7,
    hull:[[-17,-12.5],[17,-12.5],[21,-15],[15.5,-19.5],[-15.5,-19.5],[-21,-15]],
    turret:[[-12,-19.5],[12,-19.5],[10.5,-24.5],[3.5,-28],[-7.5,-28],[-11.5,-24]], gun:{len:29, w:4.4, sleeve:true, brake:true}, antennas:1},
-  {name:'BULWARK', role:'Heavy assault', hp:230, fuel:35, atk:90, wheels:6, wheelR:3.2, skirt:true,
+  {name:'BULWARK', role:'Heavy assault', hp:220, fuel:35, atk:92, wheels:6, wheelR:3.2, skirt:true,
    hull:[[-19,-12.5],[19,-12.5],[22.5,-15.5],[19,-21],[-19,-21],[-22.5,-15.5]],
    turret:[[-13.5,-21],[13.5,-21],[12.5,-26.5],[7,-30.5],[-9,-30.5],[-13.5,-26.5]], gun:{len:30, w:5.4, sleeve:true, brake:true}, antennas:1},
-  {name:'JACKAL', role:'Light recon', hp:170, fuel:100, atk:90, wheels:4, wheelR:4.2,
+  {name:'JACKAL', role:'Light recon', hp:200, fuel:100, atk:108, wheels:4, wheelR:4.2,
    hull:[[-16,-12],[16,-12],[19.5,-14],[13,-18],[-13,-18],[-18.5,-14]],
    turret:[[-8.5,-18],[9,-18],[7.5,-22.5],[-4.5,-24],[-8.5,-21.5]], gun:{len:30, w:3.2}, antennas:2},
-  {name:'MAMMOTH', role:'Twin-gun heavy', hp:225, fuel:30, atk:105, wheels:6, wheelR:3.4, skirt:true,
+  {name:'MAMMOTH', role:'Twin-gun heavy', hp:210, fuel:30, atk:102, wheels:6, wheelR:3.4, skirt:true,
    hull:[[-20,-12.5],[20,-12.5],[23,-15],[18,-20.5],[-18,-20.5],[-23,-15]],
    turret:[[-14,-20.5],[13,-20.5],[13,-26],[8,-30],[-10,-30],[-14,-26]], gun:{len:28, w:3.8, sleeve:true, twin:true}, antennas:1},
-  {name:'VIPER', role:'Tank destroyer', hp:185, fuel:75, atk:115, wheels:5, wheelR:3.5,
+  {name:'VIPER', role:'Tank destroyer', hp:180, fuel:70, atk:113, wheels:5, wheelR:3.5,
    hull:[[-18,-12.5],[18,-12.5],[22,-14],[12,-19],[-16,-19.5],[-20,-15]],
    turret:[[-13,-19],[14,-19],[11,-22.5],[-11,-24]], gun:{len:32, w:3.8, brake:true}, antennas:0},
-  {name:'RHINO', role:'Assault / dozer', hp:215, fuel:50, atk:95, wheels:5, wheelR:3.7, dozer:true,
+  {name:'RHINO', role:'Assault / dozer', hp:215, fuel:50, atk:100, wheels:5, wheelR:3.7, dozer:true,
    hull:[[-17,-12.5],[17,-12.5],[19,-15],[16,-20],[-16,-20],[-20,-15.5]],
    dome:{rx:11, ry:8.5}, gun:{len:27, w:5.6, brake:true}, antennas:1},
-  {name:'SCORPION', role:'Desert long-gun', hp:190, fuel:65, atk:110, wheels:5, wheelR:3.6, skirt:true,
+  {name:'SCORPION', role:'Desert long-gun', hp:195, fuel:65, atk:105, wheels:5, wheelR:3.6, skirt:true,
    hull:[[-17,-12.5],[17,-12.5],[21,-14.5],[14,-18.5],[-14,-18.5],[-20,-14.5]],
    dome:{rx:10, ry:7}, gun:{len:33, w:3.4, sleeve:true}, antennas:1},
-  {name:'KODIAK', role:'Reactive-armor MBT', hp:205, fuel:55, atk:100, wheels:5, wheelR:3.7, era:true,
+  {name:'KODIAK', role:'Reactive-armor MBT', hp:212, fuel:55, atk:100, wheels:5, wheelR:3.7, era:true,
    hull:[[-18,-12.5],[18,-12.5],[21.5,-15],[16,-20],[-16,-20],[-21,-15]],
    turret:[[-13,-20],[11,-20],[16.5,-23.5],[8,-29],[-10,-29],[-14,-24.5]], gun:{len:30, w:4.4, sleeve:true, brake:true}, antennas:2},
 ];
@@ -769,6 +769,60 @@ function muzzle(t) {
   return {x: p.x + Math.cos(a) * L, y: p.y - Math.sin(a) * L};
 }
 
+// ---- hitboxes: the same shapes drawTank paints (tracks, skirt, dozer blade, hull, turret or dome, barrel), in the
+// tank's own tilted frame, so a shell touching any visible part of a tank hits it, and one that misses really misses.
+const TRACKS = [[-22, -3], [-19, -10.5], [19, -10.5], [22, -3], [18, 0.5], [-18, 0.5]];
+const SKIRT = [[-22.5, -6], [22.5, -6], [21, -12.5], [-21, -12.5]], SKIRT_LOW = [[-21, -9.5], [21, -9.5], [18.5, -12.5], [-18.5, -12.5]];
+const DOZER = [[19, -1.5], [25.5, 0], [25.5, -13], [20.5, -14.5]];
+function segDist(px, py, ax, ay, bx, by) {   // distance from a point to a line segment
+  const vx = bx - ax, vy = by - ay, l2 = vx * vx + vy * vy, u = l2 ? clamp(((px - ax) * vx + (py - ay) * vy) / l2, 0, 1) : 0;
+  return Math.hypot(px - ax - u * vx, py - ay - u * vy);
+}
+function polyDist(x, y, pts) {   // 0 inside the polygon, else the distance to its edge
+  let inside = false, d = Infinity;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i], [xj, yj] = pts[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    d = Math.min(d, segDist(x, y, xi, yi, xj, yj));
+  }
+  return inside ? 0 : d;
+}
+const toTankFrame = (t, x, y) => {   // world point -> the tank's local frame (origin on the ground under its centre)
+  const dx = x - t.x, dy = y - (t.y + 4), c = Math.cos(t.tilt), s = Math.sin(t.tilt);
+  return [dx * c + dy * s, -dx * s + dy * c];
+};
+function tankDist(t, x, y) {   // distance from a world point to the nearest painted pixel of tank t (0 = touching it)
+  if (Math.abs(x - t.x) > 90 || Math.abs(y - t.y) > 90) return Infinity;   // nowhere near
+  const M = TANKS[t.model || 0], [lx, ly] = toTankFrame(t, x, y), hullTop = Math.min(...M.hull.map(p => p[1]));
+  let d = Math.min(polyDist(lx, ly, TRACKS), polyDist(lx, ly, M.skirt ? SKIRT : SKIRT_LOW), polyDist(lx, ly, M.hull));
+  if (M.dozer) d = Math.min(d, polyDist(lx, ly, DOZER));
+  if (M.turret) d = Math.min(d, polyDist(lx, ly, M.turret));
+  if (M.dome && ly <= hullTop + .5) d = Math.min(d, Math.max(0, (Math.hypot(lx / M.dome.rx, (ly - hullTop - .5) / M.dome.ry) - 1) * Math.min(M.dome.rx, M.dome.ry)));
+  const topY = M.dome ? hullTop - M.dome.ry : Math.min(...M.turret.map(p => p[1]));   // commander hatch + sight block on the roof
+  d = Math.min(d, Math.max(0, (Math.hypot((lx + 3.5) / 3.4, (ly - topY + .4) / 1.4) - 1) * 1.4));                 // hatch
+  d = Math.min(d, Math.hypot(Math.max(0, 2.5 - lx, lx - 7), Math.max(0, topY - 3.5 - ly, ly - topY)));              // sight block
+  if (t.hp > 0) {   // the barrel (both of them on a twin-gun), in world space from the turret pivot, with its thicker sleeve and muzzle brake
+    const p = pivot(t), a = t.angle * Math.PI / 180, c = Math.cos(a), s = -Math.sin(a), g = M.gun, L = g.len;
+    const parts = [[0, L, g.w / 2]];
+    if (g.sleeve) parts.push([5, 5 + L * .52, g.w * .82]);
+    if (g.brake) parts.push([L - 5, L + .5, g.w * .82]);
+    for (const off of g.twin ? [-2.6, 2.6] : [0]) {
+      const bx = p.x - Math.sin(a) * off, by = p.y - Math.cos(a) * off;
+      for (const [u0, u1, half] of parts) d = Math.min(d, Math.max(0, segDist(x, y, bx + c * u0, by + s * u0, bx + c * u1, by + s * u1) - half));
+    }
+  }
+  return d;
+}
+const tankHit = (t, x, y) => t.hp > 0 && tankDist(t, x, y) <= 1.5;   // 1.5 px of grace for the shell's own size
+function sweepTanks(x0, y0, x1, y1, skip) {   // first point on the path x0,y0 -> x1,y1 that touches a live tank (fast shells can't skip through)
+  const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 2.5));
+  for (let k = 1; k <= n; k++) {
+    const x = x0 + (x1 - x0) * k / n, y = y0 + (y1 - y0) * k / n;
+    for (const t of tanks) if (t.i !== skip && tankHit(t, x, y)) return {x, y, t};
+  }
+  return null;
+}
+
 // ====================================================== effects
 function addP(o) { parts.push(Object.assign({life: 30, max: 0, g: 0, drag: 1, size: 3, type: 'spark', vx: 0, vy: 0, rot: rnd(0, TAU), vr: rnd(-.3, .3)}, o)); const p = parts[parts.length - 1]; p.max = p.life; }
 function burst(x, y, n, o) {
@@ -968,9 +1022,9 @@ function explode(x, y, w, owner) {
   emit({t: 'boom', x, y, r: w.radius});
   let dealt = 0;
   for (const t of tanks) {
-    const d = Math.hypot(t.x - x, t.y - 8 - y);
-    if (t.hp > 0 && d < w.radius + 14) {
-      const dmg = Math.round(w.damage * atkMult(owner) * (hasStatus(t, 'corroded') ? CORRODE_MULT : 1) * (1 - Math.max(0, d - 14) / w.radius));
+    const d = tankDist(t, x, y);   // from the blast to the nearest part of the tank: touching it is a full-strength hit
+    if (t.hp > 0 && d < w.radius) {
+      const dmg = Math.round(w.damage * atkMult(owner) * (hasStatus(t, 'corroded') ? CORRODE_MULT : 1) * (1 - d / w.radius));
       if (dmg <= 0) continue;
       t.hp -= dmg; credit(owner, t, dmg); emit({t: 'pop', x: t.x, y: t.y - 56, s: '-' + dmg, c: '#ff6b5e', z: 22 + dmg / 8});
       if (isEnemy(t, owner)) { hit[owner] = true; dealt += dmg; emit({t: 'sfx', n: 'hit'}); }
@@ -1168,7 +1222,7 @@ function drillStep(s) {   // host: one frame underground
   s.trail.push([s.x, s.y]); if (s.trail.length > 36) s.trail.shift();
   const inside = s.x >= 0 && s.x < WW;
   const inCave = inside ? caves.findIndex(c => !c.falling && Math.abs(s.y - (c.top + c.h / 2)) < caveVoid(c, s.x) / 2) : -1;
-  const hitTank = tanks.some(t => t.hp > 0 && Math.hypot(s.x - t.x, s.y - (t.y - 8)) < 15);
+  const hitTank = tanks.some(t => (t.i !== s.owner || s.clearOwner) && tankHit(t, s.x, s.y));
   if (!inside) { s.dead = true; return; }
   if (inCave >= 0) caveIn(inCave);   // a drill breaking into a cave brings the roof down at once
   if (inCave >= 0 || hitTank || s.bore <= 0 || s.y >= WH - 3) { s.dead = true; explode(s.x, Math.min(s.y, WH - 3), s.w, s.owner); return; }
@@ -1205,20 +1259,24 @@ function orbitalImpact(s) {
   emit({t: 'sfx', n: 'zap'});
   for (const t of tanks) {
     const dx = Math.abs(t.x - x);
-    if (t.hp <= 0 || dx >= r + 14) continue;
-    const dmg = Math.round(s.w.damage * atkMult(s.owner) * (hasStatus(t, 'corroded') ? CORRODE_MULT : 1) * (1 - Math.max(0, dx - 14) / r));
+    const edge = Math.max(0, dx - 22);   // beam to the side of the hull
+    if (t.hp <= 0 || edge >= r) continue;
+    const dmg = Math.round(s.w.damage * atkMult(s.owner) * (hasStatus(t, 'corroded') ? CORRODE_MULT : 1) * (1 - edge / r));
     if (dmg <= 0) continue;
     t.hp -= dmg; credit(s.owner, t, dmg); emit({t: 'pop', x: t.x, y: t.y - 56, s: '-' + dmg, c: '#7fd6f5', z: 22 + dmg / 8});
     if (isEnemy(t, s.owner)) { hit[s.owner] = true; emit({t: 'sfx', n: 'hit'}); }
   }
 }
 
-function simulate(sx, sy, angle, power, windv, collect) {
+function simulate(sx, sy, angle, power, windv, self) {   // where would a shot land? Stops at the ground or at any other tank it touches
   const a = angle * Math.PI / 180, v = shotSpeed(power);
   let x = sx, y = sy, vx = Math.cos(a) * v, vy = -Math.sin(a) * v;
   for (let i = 0; i < 2000; i++) {
+    const x0 = x, y0 = y;
     vx += windv * WIND_SCALE; vy += G; x += vx; y += vy;
-    if (collect && i < collect && i % 3 === 0) collect.pts.push([x, y]);
+    if (tanks.some(t => t.i !== self && t.hp > 0 && Math.abs(t.x - x) < 70 && Math.abs(t.y - y) < 70)) {   // only sweep when near a tank
+      const h = sweepTanks(x0, y0, x, y, self); if (h) return {x: h.x, y: h.y, tank: h.t};
+    }
     if (x < 0 || x >= WW) return {x, y, out: true};
     if (y >= ground[Math.floor(x)]) return {x, y};
   }
@@ -1243,7 +1301,7 @@ function aiThink(t) {
   const m = muzzle(t), mult = powerMult(t);   // a status-afflicted CPU knows its shot is halved and compensates
   const frozen = hasStatus(t, 'frozen'), aLo = frozen ? Math.round(t.angle) : 20, aHi = frozen ? Math.round(t.angle) : 160;   // a frozen barrel can't move
   for (let a = aLo; a <= aHi; a += 2) for (let p = 20; p <= 100; p += 2) {
-    const r = simulate(m.x, m.y, a, p * mult, wind);
+    const r = simulate(m.x, m.y, a, p * mult, wind, t.i);
     if (r.out) continue;
     if (allies.some(o => Math.abs(r.x - o.x) < 70)) continue;   // don't shell your own team
     const d = Math.min(...targets.map(o => Math.hypot(r.x - o.x, r.y - o.y)));
@@ -1293,7 +1351,7 @@ function simulateDrill(sx, sy, angle, power, windv, self) {
     if (x < 0 || x >= WW) return null;
     if (y >= WH - 3) return {x, y};
     const gy = ground[Math.floor(x)];
-    if (tanks.some(t => t.hp > 0 && t.i !== self && Math.hypot(x - t.x, y - (t.y - 8)) < (under ? 15 : 13))) return {x, y};
+    if (tanks.some(t => t.i !== self && tankHit(t, x, y))) return {x, y};
     if (!under && y >= gy) {
       if (bore <= 0) return {x, y};
       under = true; spd = Math.hypot(vx, vy) || 1; dx = vx / spd; dy = vy / spd;
@@ -1477,8 +1535,15 @@ function updateGame() {
   if (state === 'fly') {
     for (const s of shots) {
       if (s.drilling) { drillStep(s); continue; }
+      const x0 = s.x, y0 = s.y;
       s.vx += wind * WIND_SCALE; s.vy += G; s.x += s.vx; s.y += s.vy;
       s.trail.push([s.x, s.y]); if (s.trail.length > 36) s.trail.shift();
+      if (s.w.kind !== 'teleport') {   // tanks first: touching any painted part of a tank is a hit, checked along the whole step
+        const skip = s.clearOwner ? -1 : s.owner;   // a fresh shell ignores its own tank until it has left the barrel
+        if (!s.clearOwner && tankDist(tanks[s.owner], s.x, s.y) > 3) s.clearOwner = true;
+        const h = sweepTanks(x0, y0, s.x, s.y, skip);
+        if (h) { s.dead = true; s.x = h.x; s.y = h.y; explode(h.x, h.y, s.w, s.owner); continue; }
+      }
       if (s.bore > 0 && s.x >= 0 && s.x < WW && s.y >= ground[Math.floor(s.x)]) { startDrill(s); continue; }   // drill: dig in instead of exploding
       if (T % 2 === 0) addP({type: 'smoke', x: s.x, y: s.y, vx: rnd(-.1, .1), vy: rnd(-.1, .1), life: 26, size: 2.5, drag: .98});
       if (s.split && s.vy > 0) {   // MIRV splits at the top of its arc
@@ -1495,7 +1560,6 @@ function updateGame() {
         continue;
       }
       if (onGround) boom = true;
-      if (!boom && s.w.kind !== 'teleport') for (const t of tanks) if (t.hp > 0 && Math.hypot(s.x - t.x, s.y - (t.y - 8)) < 13) boom = true;
       if (boom) { s.dead = true; if (s.x >= 0 && s.x < WW) explode(s.x, Math.min(s.y, WH), s.w, s.owner); }
     }
     shots = shots.filter(s => !s.dead).concat(pending); pending = [];
