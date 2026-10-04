@@ -16,14 +16,17 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
 - **Teams mode** (3–4 tanks): in the armory switch FREE-FOR-ALL → TEAMS and pick ALPHA or BRAVO; CPUs fill the smaller side.
   Last team standing wins and every member scores. Friendly fire hurts, but only hits on enemies earn a supply drop.
 - Ground that behaves like loose sand: steep slopes slump, craters cave in, dirt piles spread into dunes
-- **Underground caverns** on every map: a blast nearby caves one in, the ground above sinks into the hole and any
-  tank on top goes down with it (neighbouring caverns can chain-collapse)
+- **Underground caverns** on every map, home to little aliens: blasts nearby crack the roof (a few hits bring it down),
+  then it caves in, the ground above sinks into the hole and any
+  tank on top goes down with it, while the aliens escape in a flying saucer. Drills and orbital strikes collapse them at once
 - No wind: shells fly on gravity alone. Four weapons: Missile, Big Bomb, Triple, and the **Drill** (2 per round), which bores straight
   through the earth to hit a tank behind a hill, burst out the far side, or break into a cavern and collapse it
 - Land a hit, then type A, S, D, F in the random order shown, within 3 seconds, to spin the supply-drop wheel. Prizes go into your **stockpile** — keep as many as 8 and press **Q** (or click SUPPLY) to arm one when you want it:
-  Nuke, MIRV, Dirt Bomb, Bouncer, Airstrike, Teleport, Vampire, **Orbital Strike** (satellite laser),
-  and four status shells — **Incendiary, Cryo, EMP, Acid** — that leave the tanks they hit
-  Burning / Frozen / Shorted / Corroded: **half power on their next shot**, then it wears off
+  Nuke, MIRV, Dirt Bomb, Bouncer, **Lucky 7** (seven shells in a tight group), Teleport, Vampire, **Orbital Strike** (satellite laser),
+  and four status shells that last through the victim's next turn: **Incendiary** (burning: 15 damage when it starts),
+  **Cryo** (frozen: can't aim or drive), **Acid** (corroded: takes 50% more damage), **EMP** (shorted: half power)
+- **Move after you shoot:** once your shot lands, drive with whatever fuel is left, or press ENTER to end your turn
+- **After-action report** at the end of each round: damage, accuracy and kills for every unit
 
 ## Online play
 
@@ -47,6 +50,7 @@ The control panel and a controls + ammo card sit in a strip below the battlefiel
 | 1 2 3 4 | Choose weapon |
 | Q | Arm the next special from your supply stockpile (press again to cycle, past the last = none) |
 | Space | Fire |
+| Enter / E | After your shot: end your turn (or just drive until the fuel runs out) |
 | A S D F | After a hit: press the 4 keys shown (A, S, D, F in a random order) within 3 s |
 | T / M / P | Aim assist / sound / pause (offline only) |
 | Armory | ←/→ tank, ↑/↓ colour, Enter ready, Tab next player (hot-seat) — or click |

@@ -44,22 +44,25 @@ const WEAPONS = [
   {name:'Triple',   icon:'☄️', color:'#8be9fd', radius:24, damage:35, shots:3, ammo:3},
   {name:'Drill',    icon:'⛏️', color:'#e0a84a', radius:34, damage:55, shots:1, ammo:2, kind:'drill', bore:480},   // bores through earth
 ];
-// Status effects from the special shells: an afflicted tank fires at HALF POWER on its next shot, then the effect wears off.
+// Status effects from the special shells. Each lasts through the afflicted tank's whole next turn, then wears off.
+//   burning: 15 damage at the start of that turn · frozen: barrel and tracks locked · corroded: +50% damage taken ·
+//   shorted (EMP): its shot fires at half power
 const STATUSES = [
-  {id:'burning',  name:'BURNING',  icon:'🔥', color:'#f07a2c'},
-  {id:'frozen',   name:'FROZEN',   icon:'❄️', color:'#8fd3f4'},
-  {id:'shorted',  name:'SHORTED',  icon:'⚡', color:'#f2d24a'},
-  {id:'corroded', name:'CORRODED', icon:'🧪', color:'#9bd14a'},
+  {id:'burning',  name:'BURNING',  icon:'🔥', color:'#f07a2c', effect:'TAKES 15 DAMAGE AT TURN START', short:'15 dmg next turn'},
+  {id:'frozen',   name:'FROZEN',   icon:'❄️', color:'#8fd3f4', effect:'BARREL & TRACKS FROZEN',        short:'can\'t aim or drive'},
+  {id:'shorted',  name:'SHORTED',  icon:'⚡', color:'#f2d24a', effect:'HALF POWER THIS SHOT',          short:'half power'},
+  {id:'corroded', name:'CORRODED', icon:'🧪', color:'#9bd14a', effect:'ARMOR CORRODED: +50% DAMAGE',   short:'+50% damage taken'},
 ];
-const STATUS_MULT = 0.5;
+const STATUS_MULT = 0.5, BURN_DAMAGE = 15, CORRODE_MULT = 1.5;
+const hasStatus = (t, id) => !!(t && t.status && t.status.id === id);
 // Prize-wheel specials: one use each. They go into the tank's stockpile (STOCK_MAX); the player arms one with Q. short = wheel/HUD label, tag = menu blurb
 const SPECIALS = [
   {name:'NUKE',           short:'NUKE',       icon:'☢️', color:'#ef4444', tag:'Massive blast',     desc:'Massive blast',                       radius:115, damage:100, shots:1, kind:'nuke'},
-  {name:'CRYO SHELL',     short:'CRYO',       icon:'❄️', color:'#6fb8de', tag:'Frozen: ½ power',   desc:'FREEZES targets: ½ power next shot',   radius:34, damage:40, shots:1, kind:'status', status:STATUSES[1]},
+  {name:'CRYO SHELL',     short:'CRYO',       icon:'❄️', color:'#6fb8de', tag:'Frozen: no aim/drive', desc:'FREEZES targets: barrel & tracks locked next turn',   radius:34, damage:40, shots:1, kind:'status', status:STATUSES[1]},
   {name:'MIRV',           short:'MIRV',       icon:'🎆', color:'#f59e0b', tag:'Splits into 5',     desc:'Splits into 5 warheads',              radius:30,  damage:40,  shots:1, kind:'mirv'},
-  {name:'ACID SHELL',     short:'ACID',       icon:'🧪', color:'#86c23c', tag:'Corroded: ½ power', desc:'CORRODES targets: ½ power next shot',  radius:34, damage:40, shots:1, kind:'status', status:STATUSES[3]},
-  {name:'AIRSTRIKE',      short:'AIRSTRIKE',  icon:'✈️', color:'#3b82f6', tag:'6-bomb strike',     desc:'6 bombs rain down',                   radius:30,  damage:40,  shots:1, kind:'air'},
-  {name:'INCENDIARY',     short:'INCENDIARY', icon:'🔥', color:'#e8642c', tag:'Burning: ½ power',  desc:'Sets targets ABLAZE: ½ power next shot', radius:34, damage:40, shots:1, kind:'status', status:STATUSES[0]},
+  {name:'ACID SHELL',     short:'ACID',       icon:'🧪', color:'#86c23c', tag:'Corroded: +50% dmg', desc:'CORRODES armor: +50% damage taken next turn',  radius:34, damage:40, shots:1, kind:'status', status:STATUSES[3]},
+  {name:'LUCKY 7',        short:'LUCKY 7',    icon:'🍀', color:'#f472b6', tag:'7 shells, tight group', desc:'Your shell plus 3 above and 3 below', radius:24,  damage:24,  shots:7, spread:1.3, kind:'lucky'},
+  {name:'INCENDIARY',     short:'INCENDIARY', icon:'🔥', color:'#e8642c', tag:'Burning: -15 HP',    desc:'Sets targets ABLAZE: 15 damage next turn', radius:34, damage:40, shots:1, kind:'status', status:STATUSES[0]},
   {name:'TELEPORT',       short:'TELEPORT',   icon:'🌀', color:'#14b8a6', tag:'Warp to impact',    desc:'Warps you to where it lands',         radius:0,   damage:0,   shots:1, kind:'teleport'},
   {name:'DIRT BOMB',      short:'DIRT BOMB',  icon:'🪨', color:'#b4733a', tag:'Buries targets',    desc:'Buries with dirt',                    radius:55,  damage:0,   shots:1, kind:'dirt'},
   {name:'ORBITAL STRIKE', short:'ORBITAL',    icon:'🛰️', color:'#7fd6f5', tag:'Sky laser strike',  desc:'Satellite laser hits where it lands',  radius:46,  damage:130, shots:1, kind:'orbital'},
@@ -391,7 +394,7 @@ function makeScene(forceTheme, gdata, mi) {
   spawnFighter(0, Math.random() < .5); spawnFighter(1, Math.random() < .5);   // open on a fight already underway
   planes.forEach(p => { p.x = rnd(WW * .15, WW * .85); });
   veg = new Uint8Array(WW).fill(1);   // grass/weeds along the surface; blasted away by explosions
-  caves = []; tunnels = [];
+  caves = []; tunnels = []; saucers = [];
 }
 
 // ====================================================== atmosphere: clouds, rain, lightning, dust, mist, grass, grain
@@ -696,7 +699,7 @@ function startRound() {
   makeCaves();
   tanks = Array.from({length: numPlayers}, (_, i) => newTank(i, xs[order.indexOf(i)]));
   shots = []; parts = []; rings = []; flashes = []; popups = []; pending = []; wheel = null; winner = -1; winTeam = -1; evq = [];
-  strikes = []; beams = []; uiParts = [];
+  strikes = []; beams = []; uiParts = []; resetStats();
   hit = [false, false, false, false]; shake = 0; whiteFlash = 0; paused = false; terrainDirty = false; sandActive = false;
   mode = 'play';
   if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, v => Math.round(v * 10)), np: numPlayers, ai: tanks.map(t => t.ai), lo: tanks.map(t => [t.model, t.color, t.team]), tm: teamMode,
@@ -710,10 +713,52 @@ function nextAlive(from) {
   return from;
 }
 function beginTurn(t) {
+  const prev = tanks[turn];   // a status lasts through the afflicted tank's whole next turn, then wears off
+  if (prev && prev.statusLive) { prev.status = null; prev.statusLive = false; }
   turn = t; state = 'aim'; wind = 0;   // no wind: shells fly on gravity alone
-  tanks[t].fuel = tanks[t].maxFuel; tanks[t].armed = -1; aiPlan = null; aiTimer = 80;
-  turnFrames = net && !tanks[t].ai ? TURN_SECONDS * 60 : 0;   // online humans get a shot clock so nobody can stall the game
+  const tk = tanks[t];
+  tk.fuel = tk.maxFuel; tk.armed = -1; aiPlan = null; aiTimer = 80; aiMove = null; moveFrames = 0; moved = false;
+  turnFrames = net && !tk.ai ? TURN_SECONDS * 60 : 0;   // online humans get a shot clock so nobody can stall the game
+  if (tk.status) {
+    tk.statusLive = true;
+    if (tk.status.id === 'burning') {   // the fire burns a chunk of armor off at the start of its turn
+      tk.hp -= BURN_DAMAGE;
+      emit({t: 'pop', x: tk.x, y: tk.y - 56, s: `🔥 -${BURN_DAMAGE}`, c: '#f07a2c', z: 22});
+      emit({t: 'stfx', k: 0, x: tk.x, y: tk.y - 10, r: 20});
+      if (tk.hp <= 0) { hit = [false, false, false, false]; state = 'settle'; aiTimer = 40; return; }   // burned out: let the death play
+    }
+    if (tk.status.id === 'frozen') tk.fuel = 0;   // tracks frozen solid
+  }
   emit({t: 'turn', i: t});
+}
+// after the shot (and any combo / supply wheel) the shooter may drive with leftover fuel before the turn passes:
+// until the fuel runs out, they press ENTER / E (or click END TURN), or (online) the move clock runs down
+const MOVE_SECONDS = 15;
+let moveFrames = 0, aiMove = null, moved = false;
+function endShot() {
+  const t = tanks[turn];
+  const cpuFrames = t && t.ai && Math.random() < .55 ? Math.floor(rnd(20, 90)) : 0;   // CPUs sometimes shuffle along a bit
+  if (!moved && t && t.hp > 0 && t.fuel > 1 && (!t.ai || cpuFrames)) {
+    state = 'move'; moveFrames = net && !t.ai ? MOVE_SECONDS * 60 : 0;
+    aiMove = t.ai ? {dir: Math.random() < .5 ? -1 : 1, frames: cpuFrames} : null;
+    emit({t: 'moveph', i: turn});
+  } else beginTurn(nextAlive(turn));
+}
+function endMove() {   // back through 'settle' so a tank that drove off a ledge lands (and the win check runs) first
+  if (state !== 'move') return;
+  moved = true; hit = [false, false, false, false]; state = 'settle'; aiTimer = 20; moveFrames = 0;
+}
+function requestEndMove() {   // this machine's player ends their move phase
+  if (net && net.role === 'client') { if (net.conn.open) net.conn.send({t: 'end'}); }
+  else endMove();
+}
+function driveTank(t, dir) {   // shared by players and CPUs: crawl along the ground, burning fuel, unless it's too steep
+  if (!dir || t.fuel <= 0) return;
+  const nx = clamp(t.x + dir * 0.8, 14, WW - 14);
+  if (nx !== t.x && Math.abs(ground[Math.floor(nx)] - ground[Math.floor(t.x)]) < 2.5) {
+    t.x = nx; t.fuel = Math.max(0, t.fuel - 0.5);
+    if (T % 4 === 0) addP({type: 'smoke', x: t.x - dir * 14, y: t.y + 3, vx: -dir * .4, vy: -.3, g: -.005, life: 25, size: 3, drag: .95});
+  }
 }
 function pivot(t) {   // world position of the turret pivot, accounting for hull tilt
   return {x: t.x + 22 * Math.sin(t.tilt), y: t.y + 4 - 22 * Math.cos(t.tilt)};
@@ -789,18 +834,27 @@ function fire() {
   hit = [false, false, false, false];
   const m = muzzle(t), v = shotSpeed(shotPower(t));
   for (let k = 0; k < w.shots; k++) {
-    const a = (t.angle + (k - (w.shots - 1) / 2) * 7) * Math.PI / 180;
+    const a = (t.angle + (k - (w.shots - 1) / 2) * (w.spread || 7)) * Math.PI / 180;   // Triple fans out 7°, Lucky 7 is tight
     shots.push({id: ++shotId, x: m.x, y: m.y, vx: Math.cos(a) * v, vy: -Math.sin(a) * v, w, owner: turn, trail: [],
                 bounces: w.kind === 'bounce' ? 3 : 0, split: w.kind === 'mirv', bore: w.bore || 0});
   }
   emit({t: 'fire', i: turn});
-  if (t.status) {   // a status effect only lasts for the afflicted tank's next shot
-    emit({t: 'pop', x: t.x, y: t.y - 74, s: `${t.status.icon} HALF POWER`, c: t.status.color, z: 16});
-    t.status = null;
-  }
+  stats[turn].shots++; shotLanded = false;
+  if (hasStatus(t, 'shorted')) emit({t: 'pop', x: t.x, y: t.y - 74, s: '⚡ HALF POWER', c: t.status.color, z: 16});
   state = 'fly';
 }
-const powerMult = t => t.status ? STATUS_MULT : 1;
+const powerMult = t => hasStatus(t, 'shorted') ? STATUS_MULT : 1;
+// after-action report: shots fired, shots that hit an enemy, damage dealt to enemies, kills (host counts, clients get a copy)
+let stats = [], shotLanded = false;
+function resetStats() { stats = Array.from({length: 4}, () => ({shots: 0, hits: 0, dmg: 0, kills: 0})); }
+resetStats();
+function credit(owner, t, dmg) {   // a tank took damage from someone's shell
+  if (owner == null || !stats[owner]) return;
+  t.lastHitBy = owner;
+  if (!isEnemy(t, owner)) return;
+  stats[owner].dmg += dmg;
+  if (!shotLanded && owner === turn) { shotLanded = true; stats[owner].hits++; }
+}
 // supply-drop stockpile: specials won on the wheel are kept until the player arms one (Q / click SUPPLY) and fires it
 const STOCK_MAX = 8;
 const armedSpecial = t => t && t.armed >= 0 ? t.stock[t.armed] || null : null;
@@ -818,10 +872,17 @@ function applyEvent(e) {
     case 'turn': {
       const t = tanks[e.i]; if (!t) return;
       banner = {t: 0, text: `${teamMode ? TEAMS[t.team].name + ' · ' : ''}UNIT ${e.i + 1} — FIRE MISSION`, color: teamMode ? TEAMS[t.team].color : t.color,
-                sub: t.status ? `${t.status.icon} ${t.status.name}: HALF POWER THIS SHOT`
+                sub: t.status ? `${t.status.icon} ${t.status.name}: ${t.status.effect}`
                    : t.ai ? 'CPU' : (net ? (isMine(t) ? 'YOUR ORDERS' : 'ALLIED COMMAND') : 'YOUR ORDERS'),
                 subColor: t.status ? t.status.color : null};
       if (net && isMine(t) && !t.ai) sfx.prize();
+      break;
+    }
+    case 'moveph': {   // the shooter's reposition phase
+      const t = tanks[e.i]; if (!t) return;
+      const mine = isMine(t) && !t.ai;
+      banner = {t: 0, text: mine ? 'REPOSITION' : `UNIT ${e.i + 1} — REPOSITIONING`, color: t.color,
+                sub: mine ? 'A / D TO DRIVE  ·  ENTER TO END TURN' : 'moving with leftover fuel'};
       break;
     }
     case 'fire': {
@@ -871,6 +932,7 @@ function applyEvent(e) {
       clearVeg(e.x, 10); noise(.7, .22, 2200, 300); tone(140, 70, .7, 'sawtooth', .05);
       break;
     }
+    case 'cvh': { const c = caves[e.i]; if (c && !c.falling) { c.hp = e.hp; caveCrackFx(c); } break; }
     case 'cave': { const c = caves[e.i]; if (c && !c.falling) { c.falling = true; caveFx(c); } break; }
   }
 }
@@ -900,23 +962,20 @@ function explode(x, y, w, owner) {
     emit({t: 'orbital', x: sx});
     return;
   }
-  if (w.kind === 'air') {
-    for (let i = 0; i < 6; i++) pending.push({id: ++shotId, x: x + (i - 2.5) * 48, y: -20 - i * 25, vx: 0, vy: 3, w: CHILD, owner, trail: [], bounces: 0});
-  }
   crater(x, y, w.radius);
   terrainDirty = true;
-  caveCheck(x, y, w.radius);
+  caveCheck(x, y, w.radius, w.damage);
   emit({t: 'boom', x, y, r: w.radius});
   let dealt = 0;
   for (const t of tanks) {
     const d = Math.hypot(t.x - x, t.y - 8 - y);
     if (t.hp > 0 && d < w.radius + 14) {
-      const dmg = Math.round(w.damage * atkMult(owner) * (1 - Math.max(0, d - 14) / w.radius));
+      const dmg = Math.round(w.damage * atkMult(owner) * (hasStatus(t, 'corroded') ? CORRODE_MULT : 1) * (1 - Math.max(0, d - 14) / w.radius));
       if (dmg <= 0) continue;
-      t.hp -= dmg; emit({t: 'pop', x: t.x, y: t.y - 56, s: '-' + dmg, c: '#ff6b5e', z: 22 + dmg / 8});
+      t.hp -= dmg; credit(owner, t, dmg); emit({t: 'pop', x: t.x, y: t.y - 56, s: '-' + dmg, c: '#ff6b5e', z: 22 + dmg / 8});
       if (isEnemy(t, owner)) { hit[owner] = true; dealt += dmg; emit({t: 'sfx', n: 'hit'}); }
       if (w.status && t.hp > 0) {   // status shells: half power on the target's next shot
-        t.status = w.status;
+        t.status = w.status; t.statusLive = false;   // lasts through the victim's next turn
         emit({t: 'pop', x: t.x, y: t.y - 80, s: `${w.status.icon} ${w.status.name}!`, c: w.status.color, z: 19});
       }
     }
@@ -928,37 +987,51 @@ function explode(x, y, w, owner) {
   }
 }
 
-// ---- underground caverns: hollow pockets under the surface, generated by the host each round. A blast close enough
-// makes one cave in: the ground above drops into the void (the surface sinks by the cave's height), tanks on top fall
-// with it, the loose edges slump, and the shock can set off a neighbouring cave.
-let caves = [];
+// ---- underground caverns: big hollow pockets under the surface, generated by the host each round. Every blast
+// nearby chips at a cave's integrity (closer and bigger blasts do more; cracks spread across the roof). At zero it caves
+// in: the ground above drops into the void, tanks on top fall with it, the loose edges slump, and the shock jolts
+// any cave right beside it. A drill breaking in, or an orbital beam, brings it down at once. Little aliens live inside.
+let caves = [], saucers = [];
 const CAVE_FRAMES = 14;
+function newCave(x, w, top, h) {
+  const n = 2 + Math.floor(hash01(x * .37) * 3);   // the aliens are cosmetic and derived from the cave, so every machine agrees
+  const aliens = Array.from({length: n}, (_, k) => ({u: -.55 + 1.1 * (k + .5) / n, range: .08 + hash01(x + k * 7) * .14,
+    sp: .006 + hash01(x * 3 + k) * .01, ph: hash01(x + k * 13) * TAU, col: ['#7ee07a', '#a6e86a', '#b48cf0', '#6fd6c8'][Math.floor(hash01(x * 5 + k) * 4)]}));
+  return {x, w, top, h, hp: 100, age: 0, applied: 0, falling: false, shake: 0, aliens};
+}
 function makeCaves() {
-  caves = [];
-  const n = 2 + Math.floor(Math.random() * 3);
-  for (let tries = 0; tries < 300 && caves.length < n; tries++) {
-    const w = rnd(70, 150) * K, x = rnd(w + 30, WW - w - 30), h = rnd(40, 72) * K;
-    if (caves.some(c => Math.abs(c.x - x) < c.w + w + 50)) continue;
+  caves = []; saucers = [];
+  const n = 2 + Math.floor(Math.random() * 2);
+  for (let tries = 0; tries < 400 && caves.length < n; tries++) {
+    const w = rnd(130, 240) * K, x = rnd(w + 30, WW - w - 30), h = rnd(75, 120) * K;
+    if (caves.some(c => Math.abs(c.x - x) < c.w + w + 60)) continue;
     let surf = 0; for (let px = x - w; px <= x + w; px += 4) surf = Math.max(surf, ground[Math.floor(px)]);
-    const top = surf + rnd(40, 100) * K;   // roof thickness under the lowest point above it
+    const top = Math.max(ground[Math.floor(x)] + rnd(55, 100) * K, surf + 30 * K);   // roof thickness below the middle, never poking out on a slope
     if (top + h > WH - 14) continue;
-    caves.push({x, w, top, h, age: 0, applied: 0, falling: false});
+    caves.push(newCave(x, w, top, h));
   }
 }
 const caveVoid = (c, px) => { const u = (px - c.x) / c.w; return u * u >= 1 ? 0 : c.h * Math.sqrt(1 - u * u); };   // void height at column px
-function caveCheck(x, y, r, column) {   // host/local: does a blast here disturb any cave?
+function caveCheck(x, y, r, dmg) {   // host/local: how hard does a blast here shake each cave?
   caves.forEach((c, i) => {
     if (c.falling) return;
-    const dx = Math.max(0, Math.abs(x - c.x) - c.w), dy = column ? 0 : Math.max(0, Math.abs(y - (c.top + c.h / 2)) - c.h / 2);
-    if (Math.hypot(dx, dy * .6) < r + 70 * K) caveIn(i);   // the shock travels down through the roof more easily than sideways
+    const dx = Math.max(0, Math.abs(x - c.x) - c.w), dy = Math.max(0, Math.abs(y - (c.top + c.h / 2)) - c.h / 2);
+    const reach = r + 90 * K, d = Math.hypot(dx, dy * .45);   // the shock travels down through the roof more easily than sideways
+    if (d < reach) caveHit(i, Math.round(dmg * (1 - d / reach) * (1 + r / 120)));
   });
+}
+function caveHit(i, blow) {
+  const c = caves[i]; if (!c || c.falling || blow <= 0) return;
+  const hp = Math.max(0, c.hp - blow);
+  emit({t: 'cvh', i, hp});
+  if (hp <= 0) caveIn(i);
 }
 function caveIn(i) {
   const c = caves[i]; if (!c || c.falling) return;
   emit({t: 'cave', i});
-  caves.forEach((o, j) => { if (!o.falling && Math.abs(o.x - c.x) < o.w + c.w + 70 * K) caveIn(j); });   // chain reaction
+  caves.forEach((o, j) => { if (!o.falling && Math.abs(o.x - c.x) < o.w + c.w + 70 * K) caveHit(j, 60); });   // jolts a neighbour
 }
-function caveFx(c) {   // everyone: dust and rubble pouring off the sinking ground, a deep rumble
+function caveFx(c) {   // everyone: dust and rubble pouring off the sinking ground, a deep rumble, and the aliens bail out
   for (let px = c.x - c.w; px <= c.x + c.w; px += 10) {
     const gx = clamp(Math.floor(px), 0, WW - 1);
     addP({type: 'smoke', x: px + rnd(-5, 5), y: ground[gx] - 4, vx: rnd(-.4, .4), vy: -rnd(.3, 1.2), g: -.01, life: rnd(60, 110), size: rnd(6, 11), drag: .97});
@@ -967,9 +1040,20 @@ function caveFx(c) {   // everyone: dust and rubble pouring off the sinking grou
   popup(c.x, ground[clamp(Math.floor(c.x), 0, WW - 1)] - 40, 'CAVE-IN!', '#e2c290', 22);
   shake = Math.max(shake, 9);
   noise(1.4, .45, 700, 40); tone(48, 25, 1.4, 'sine', .3);
+  saucers.push({x: c.x, y: c.top + c.h / 2, t: 0, dir: Math.random() < .5 ? -1 : 1, crew: c.aliens.length});
+  tone(300, 1500, .9, 'sine', .05, .3); tone(600, 2400, .7, 'triangle', .03, .5);   // whee-ooo
+}
+function caveCrackFx(c) {   // everyone: a blast shook the cave, dust sifts down inside, the aliens jump
+  c.shake = 45;
+  for (let k = 0; k < 10; k++) {
+    const px = c.x + rnd(-c.w * .7, c.w * .7);
+    addP({type: 'dirt', x: px, y: c.top + c.h / 2 - caveVoid(c, px) / 2 + 2, vx: rnd(-.3, .3), vy: rnd(0, 1), g: .12, life: rnd(20, 40), size: rnd(1.5, 3), color: pick(theme.dirt)});
+  }
+  tone(70, 40, .4, 'sine', .08);
 }
 function updateCaves(host) {
   for (const c of caves) {
+    if (c.shake > 0) c.shake--;
     if (!c.falling) continue;
     c.age++;
     if (host && c.applied < CAVE_FRAMES) {   // the column above drops into the void a bit more each frame
@@ -978,6 +1062,8 @@ function updateCaves(host) {
       disturbSand(); terrainDirty = true;
     }
   }
+  for (const s of saucers) s.t++;
+  saucers = saucers.filter(s => s.t < 400);
 }
 function drawCaves() {   // inside the terrain clip, so a cave never shows above the surface
   for (const c of caves) {
@@ -990,13 +1076,78 @@ function drawCaves() {   // inside the terrain clip, so a cave never shows above
     ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 3; ctx.stroke();
     if (!p) {   // stalactites hanging from the roof, rubble on the floor
       ctx.fillStyle = 'rgba(70,56,40,.9)';
-      for (let k = -4; k <= 4; k++) {
-        const sx = c.x + k * c.w / 5.2, roof = cy - caveVoid(c, sx) / 2, len = (5 + hash01(c.x + k) * 12) * K;
+      for (let k = -6; k <= 6; k++) {
+        const sx = c.x + k * c.w / 7.2, roof = cy - caveVoid(c, sx) / 2, len = (5 + hash01(c.x + k) * 14) * K;
         ctx.beginPath(); ctx.moveTo(sx - 4, roof - 1); ctx.lineTo(sx + 4, roof - 1); ctx.lineTo(sx, roof + len); ctx.fill();
       }
       ctx.fillStyle = 'rgba(60,48,34,.9)';
-      for (let k = -3; k <= 3; k++) { const sx = c.x + k * c.w / 4.3 + 6, fl = cy + caveVoid(c, sx) / 2; ctx.beginPath(); ctx.ellipse(sx, fl - 2, 6 + hash01(k + c.w) * 6, 3.5, 0, Math.PI, TAU); ctx.fill(); }
+      for (let k = -4; k <= 4; k++) { const sx = c.x + k * c.w / 5.3 + 6, fl = cy + caveVoid(c, sx) / 2; ctx.beginPath(); ctx.ellipse(sx, fl - 2, 6 + hash01(k + c.w) * 7, 3.5, 0, Math.PI, TAU); ctx.fill(); }
+      // cracks through the roof: more of them, and longer, as the cave's integrity drops
+      const cracks = Math.ceil((100 - c.hp) / 18);
+      ctx.strokeStyle = 'rgba(12,8,4,.85)'; ctx.lineWidth = 2; ctx.lineJoin = 'miter';
+      for (let k = 0; k < cracks; k++) {
+        let x = c.x + (hash01(c.x + k * 31) - .5) * c.w * 1.4, y = cy - caveVoid(c, x) / 2;
+        ctx.beginPath(); ctx.moveTo(x, y);
+        const len = 4 + (100 - c.hp) / 12;
+        for (let j = 0; j < len; j++) { x += (hash01(x + j) - .5) * 10; y -= 4 + hash01(y + j) * 4; ctx.lineTo(x, y); }
+        ctx.stroke();
+      }
     }
+  }
+}
+// the cave-dwellers: little green (and purple) aliens pottering about on the cave floor, drawn fresh every frame
+function drawAliens() {
+  for (const c of caves) {
+    if (c.falling) continue;
+    const cy = c.top + c.h / 2;
+    ctx.save(); ctx.beginPath(); ctx.ellipse(c.x, cy, c.w, c.h / 2, 0, 0, TAU); ctx.clip();
+    const glow = ctx.createRadialGradient(c.x, cy + c.h * .3, 0, c.x, cy + c.h * .3, c.w * .8);
+    glow.addColorStop(0, 'rgba(140,255,150,.10)'); glow.addColorStop(1, 'rgba(140,255,150,0)');
+    ctx.fillStyle = glow; ctx.fillRect(c.x - c.w, c.top, c.w * 2, c.h);
+    for (const a of c.aliens) {
+      const ph = T * a.sp + a.ph, x = c.x + (a.u + Math.sin(ph) * a.range) * c.w, face = Math.cos(ph) >= 0 ? 1 : -1;
+      const hop = c.shake > 0 ? Math.abs(Math.sin(T * .35 + a.ph)) * 7 : 0;
+      drawAlien(x, cy + caveVoid(c, x) / 2 - 3 - hop, face, a.col, (T + a.ph * 40) % 170 < 6, c.shake > 0);
+    }
+    ctx.restore();
+  }
+}
+function drawAlien(x, y, face, col, blink, scared) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(face * K * 1.6, K * 1.6);
+  const step = Math.sin(T * .3 + x) * 1.6;
+  ctx.strokeStyle = shade(col, -.35); ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-1.8, -4); ctx.lineTo(-1.8 - step * .6, 0); ctx.moveTo(1.8, -4); ctx.lineTo(1.8 + step * .6, 0); ctx.stroke();   // legs
+  ctx.fillStyle = col; ctx.beginPath(); ctx.ellipse(0, -7, 3.4, 4, 0, 0, TAU); ctx.fill();   // body
+  ctx.strokeStyle = col; ctx.beginPath();   // arms, thrown up when scared
+  ctx.moveTo(-2.5, -8); ctx.lineTo(scared ? -6 : -4.5, scared ? -13 : -5.5); ctx.moveTo(2.5, -8); ctx.lineTo(scared ? 6 : 4.5, scared ? -13 : -5.5); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(.6, -14, 5.6, 4.6, 0, 0, TAU); ctx.fill();   // big head
+  ctx.beginPath(); ctx.moveTo(-1, -18); ctx.lineTo(-2.6, -22.5); ctx.moveTo(2.4, -18); ctx.lineTo(4, -22.5); ctx.stroke();   // antennae
+  ctx.fillStyle = '#fff37a'; ctx.beginPath(); ctx.arc(-2.6, -22.8, 1.3, 0, TAU); ctx.arc(4, -22.8, 1.3, 0, TAU); ctx.fill();
+  ctx.fillStyle = '#0d0f0a';
+  if (blink) { ctx.fillRect(-1.8, -14.4, 2.4, .9); ctx.fillRect(1.9, -14.4, 2.4, .9); }
+  else {
+    ctx.beginPath(); ctx.ellipse(-.6, -14.3, 1.5, scared ? 2.6 : 2.1, -.3, 0, TAU); ctx.ellipse(3.1, -14.3, 1.5, scared ? 2.6 : 2.1, .3, 0, TAU); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.fillRect(-.6, -15.4, .8, .8); ctx.fillRect(3.1, -15.4, .8, .8);
+  }
+  ctx.restore();
+}
+function drawSaucers() {   // when their cave collapses the aliens escape: up through the dust, a wobble, then zip off
+  for (const s of saucers) {
+    const t = s.t, rise = Math.min(t, 80);
+    const x = s.x + Math.sin(t * .18) * 6 + (t > 80 ? s.dir * (t - 80) * (t - 80) * .06 : 0), y = s.y - rise * 4.2 - (t > 80 ? (t - 80) * 1.2 : 0);
+    if (t < 80) {   // tractor-beam glow underneath
+      ctx.fillStyle = 'rgba(170,255,190,.12)'; ctx.beginPath();
+      ctx.moveTo(x - 8 * K, y); ctx.lineTo(x + 8 * K, y); ctx.lineTo(x + 26 * K, y + 90 * K); ctx.lineTo(x - 26 * K, y + 90 * K); ctx.fill();
+    }
+    ctx.save(); ctx.translate(x, y); ctx.scale(K, K); ctx.rotate(Math.sin(t * .15) * .15 + (t > 80 ? s.dir * .25 : 0));
+    ctx.fillStyle = 'rgba(160,230,255,.75)'; ctx.beginPath(); ctx.ellipse(0, -4, 7, 6, 0, Math.PI, TAU); ctx.fill();   // glass dome
+    ctx.fillStyle = '#7ee07a'; ctx.beginPath(); ctx.arc(0, -5.5, 2.6, 0, TAU); ctx.fill();   // pilot
+    ctx.fillStyle = '#0d0f0a'; ctx.fillRect(-1.6, -6.2, 1.2, 1.4); ctx.fillRect(.6, -6.2, 1.2, 1.4);
+    const sg = ctx.createLinearGradient(0, -4, 0, 4); sg.addColorStop(0, '#e8edf2'); sg.addColorStop(1, '#7d8792');
+    ctx.fillStyle = sg; ctx.beginPath(); ctx.ellipse(0, 0, 16, 4.5, 0, 0, TAU); ctx.fill();   // hull
+    for (let k = 0; k < 5; k++) { ctx.fillStyle = (Math.floor(t / 6) + k) % 2 ? '#ff6b6b' : '#ffe66d'; ctx.beginPath(); ctx.arc(-11 + k * 5.5, .8, 1.2, 0, TAU); ctx.fill(); }   // running lights
+    ctx.restore();
+    if (t === 30) popup(x, y - 24, `👽 ×${s.crew} ESCAPED`, '#a6f2a0', 16);
   }
 }
 
@@ -1016,10 +1167,11 @@ function drillStep(s) {   // host: one frame underground
   s.x += s.vx; s.y += s.vy; s.bore -= DRILL_SPEED; tunnelPoint(s);
   s.trail.push([s.x, s.y]); if (s.trail.length > 36) s.trail.shift();
   const inside = s.x >= 0 && s.x < WW;
-  const inCave = inside && caves.some(c => !c.falling && Math.abs(s.y - (c.top + c.h / 2)) < caveVoid(c, s.x) / 2);
+  const inCave = inside ? caves.findIndex(c => !c.falling && Math.abs(s.y - (c.top + c.h / 2)) < caveVoid(c, s.x) / 2) : -1;
   const hitTank = tanks.some(t => t.hp > 0 && Math.hypot(s.x - t.x, s.y - (t.y - 8)) < 15);
   if (!inside) { s.dead = true; return; }
-  if (inCave || hitTank || s.bore <= 0 || s.y >= WH - 3) { s.dead = true; explode(s.x, Math.min(s.y, WH - 3), s.w, s.owner); return; }
+  if (inCave >= 0) caveIn(inCave);   // a drill breaking into a cave brings the roof down at once
+  if (inCave >= 0 || hitTank || s.bore <= 0 || s.y >= WH - 3) { s.dead = true; explode(s.x, Math.min(s.y, WH - 3), s.w, s.owner); return; }
   if (s.y < ground[Math.floor(s.x)]) {   // broke out into open air: fly on
     s.drilling = false; s.vx = s.dx * s.spd * .85; s.vy = s.dy * s.spd * .85;
     emit({t: 'drill', x: s.x, y: ground[Math.floor(s.x)], out: 1});
@@ -1047,16 +1199,16 @@ function orbitalImpact(s) {
     if (f > 0) ground[px] = Math.min(WH - 2, ground[px] + 150 * f);
   }
   disturbSand(); terrainDirty = true;
-  caveCheck(x, 0, r, true);   // the beam drives straight down through any cave beneath it
+  caves.forEach((c, i) => { if (!c.falling && Math.abs(x - c.x) < c.w + r) caveIn(i); });   // the beam drives straight down through any cave beneath it
   const gy = ground[clamp(Math.floor(x), 0, WW - 1)];
   emit({t: 'boom', x, y: gy, r: 70});
   emit({t: 'sfx', n: 'zap'});
   for (const t of tanks) {
     const dx = Math.abs(t.x - x);
     if (t.hp <= 0 || dx >= r + 14) continue;
-    const dmg = Math.round(s.w.damage * atkMult(s.owner) * (1 - Math.max(0, dx - 14) / r));
+    const dmg = Math.round(s.w.damage * atkMult(s.owner) * (hasStatus(t, 'corroded') ? CORRODE_MULT : 1) * (1 - Math.max(0, dx - 14) / r));
     if (dmg <= 0) continue;
-    t.hp -= dmg; emit({t: 'pop', x: t.x, y: t.y - 56, s: '-' + dmg, c: '#7fd6f5', z: 22 + dmg / 8});
+    t.hp -= dmg; credit(s.owner, t, dmg); emit({t: 'pop', x: t.x, y: t.y - 56, s: '-' + dmg, c: '#7fd6f5', z: 22 + dmg / 8});
     if (isEnemy(t, s.owner)) { hit[s.owner] = true; emit({t: 'sfx', n: 'hit'}); }
   }
 }
@@ -1089,7 +1241,8 @@ function aiThink(t) {
   if (!targets.length) return fire();
   let best = null;
   const m = muzzle(t), mult = powerMult(t);   // a status-afflicted CPU knows its shot is halved and compensates
-  for (let a = 20; a <= 160; a += 2) for (let p = 20; p <= 100; p += 2) {
+  const frozen = hasStatus(t, 'frozen'), aLo = frozen ? Math.round(t.angle) : 20, aHi = frozen ? Math.round(t.angle) : 160;   // a frozen barrel can't move
+  for (let a = aLo; a <= aHi; a += 2) for (let p = 20; p <= 100; p += 2) {
     const r = simulate(m.x, m.y, a, p * mult, wind);
     if (r.out) continue;
     if (allies.some(o => Math.abs(r.x - o.x) < 70)) continue;   // don't shell your own team
@@ -1106,7 +1259,7 @@ function aiThink(t) {
   });
   const overCave = targets.some(o => caves.some(c => !c.falling && Math.abs(o.x - c.x) < c.w));
   if (t.ammo[3] > 0 && (best.d > 30 || behindCover || overCave)) {
-    for (let a = 4; a <= 176; a += 3) for (let p = 20; p <= 100; p += 3) {
+    for (let a = frozen ? aLo : 4; a <= (frozen ? aHi : 176); a += 3) for (let p = 20; p <= 100; p += 3) {
       const r = simulateDrill(m.x, m.y, a, p * mult, wind, t.i);
       if (!r || allies.some(o => Math.abs(r.x - o.x) < 70)) continue;
       let d = Math.min(...targets.map(o => Math.hypot(r.x - o.x, r.y - o.y))), cave = false;
@@ -1120,6 +1273,7 @@ function aiThink(t) {
   if (useDrill) best = drill;
   const err = useDrill ? 3 : 5;   // a drill line is less forgiving, so the CPU aims it more carefully
   aiPlan = {a: best.a + rnd(-err, err), p: Math.round(clamp(best.p + rnd(-err, err), 20, 100)), weapon: useDrill ? 3 : 0};
+  if (frozen) aiPlan.a = t.angle;
   if (!useDrill) {
     if (t.ammo[1] > 0 && best.d < 40 && Math.random() < .6) aiPlan.weapon = 1;
     else if (t.ammo[2] > 0 && Math.random() < .3) aiPlan.weapon = 2;
@@ -1176,20 +1330,17 @@ function tankCosmetics(t) {
   }
 }
 // keyboard aiming/driving for a human-controlled tank on THIS machine
-function humanControl(t) {
-  const fine = keys['shift'] ? 0.2 : 1;
-  if (keys['arrowleft'])  t.angle = Math.min(180, t.angle + fine);
-  if (keys['arrowright']) t.angle = Math.max(0, t.angle - fine);
-  if (keys['arrowup'])    t.power = Math.min(100, t.power + fine * 0.6);
-  if (keys['arrowdown'])  t.power = Math.max(5, t.power - fine * 0.6);
-  const dir = (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0);
-  if (dir && t.fuel > 0) {
-    const nx = clamp(t.x + dir * 0.8, 14, WW - 14);
-    if (nx !== t.x && Math.abs(ground[Math.floor(nx)] - ground[Math.floor(t.x)]) < 2.5) {
-      t.x = nx; t.fuel -= 0.5;
-      if (T % 4 === 0) addP({type: 'smoke', x: t.x - dir * 14, y: t.y + 3, vx: -dir * .4, vy: -.3, g: -.005, life: 25, size: 3, drag: .95});
+function humanControl(t, moveOnly) {
+  const fine = keys['shift'] ? 0.2 : 1, frozen = t.status && t.status.id === 'frozen';
+  if (!moveOnly) {
+    if (!frozen) {   // a frozen barrel won't traverse
+      if (keys['arrowleft'])  t.angle = Math.min(180, t.angle + fine);
+      if (keys['arrowright']) t.angle = Math.max(0, t.angle - fine);
     }
+    if (keys['arrowup'])    t.power = Math.min(100, t.power + fine * 0.6);
+    if (keys['arrowdown'])  t.power = Math.max(5, t.power - fine * 0.6);
   }
+  if (!frozen) driveTank(t, (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0));
 }
 
 // the menu / armory / lobby backdrop: the parked tanks trade (harmless) shots across the field
@@ -1289,8 +1440,10 @@ function updateGame() {
     } else { t.y = gy; t.vy = 0; }
     if (t.hp <= 0 && !t.dead) {
       t.dead = true; t.hp = 0;
+      const by = t.lastHitBy;   // kill credit goes to whoever last hit it (a self-kill or a friendly kill doesn't count)
+      if (by != null && by !== t.i && stats[by] && isEnemy(t, by)) stats[by].kills++;
       emit({t: 'bang', x: t.x, y: t.y - 8, r: 42});
-      emit({t: 'pop', x: t.x, y: t.y - 60, s: 'DESTROYED', c: '#fff', z: 20});
+      emit({t: 'pop', x: t.x, y: t.y - 60, s: by != null && by !== t.i ? `DESTROYED BY UNIT 0${by + 1}` : 'DESTROYED', c: '#fff', z: 20});
     }
   }
 
@@ -1309,11 +1462,17 @@ function updateGame() {
     // (online: other players' angle/power/position arrive as 'in' messages)
     if (turnFrames > 0 && --turnFrames === 0 && !t.ai) {
       emit({t: 'pop', x: t.x, y: t.y - 72, s: 'TIME UP!', c: '#fca5a5', z: 20});
-      t.status = null;   // a status lasts one turn, even a skipped one
       beginTurn(nextAlive(turn));
     }
   }
-  turnLeft = turnFrames > 0 && state === 'aim' ? Math.ceil(turnFrames / 60) : 0;
+  if (state === 'move') {   // after the shot: drive with what's left in the tank, then the turn passes
+    const t = tanks[turn];
+    if (t.ai) { if (!aiMove || aiMove.frames-- <= 0) endMove(); else driveTank(t, aiMove.dir); }
+    else if (isMine(t)) humanControl(t, true);
+    if (state === 'move' && (t.fuel <= 0 || t.hp <= 0)) endMove();
+    else if (state === 'move' && moveFrames > 0 && --moveFrames === 0) endMove();
+  }
+  turnLeft = turnFrames > 0 && state === 'aim' ? Math.ceil(turnFrames / 60) : moveFrames > 0 && state === 'move' ? Math.ceil(moveFrames / 60) : 0;
 
   if (state === 'fly') {
     for (const s of shots) {
@@ -1352,7 +1511,7 @@ function updateGame() {
       if (tanks[turn].ai && !q.ai) q.ai = {next: 24, failAt: Math.random() < .7 ? -1 : Math.floor(rnd(1, 4))};   // CPU nails it ~70% of the time
       if (q.ai && --q.ai.next <= 0) { qteKey(q.idx === q.ai.failAt ? 'x' : q.seq[q.idx]); q.ai.next = Math.floor(rnd(12, 22)); }
       if (!q.done && q.t > q.limit) qteEnd(false, 'TIMED OUT!');
-    } else if (++q.resT > 55) { qte = null; if (q.ok) startWheel(); else beginTurn(nextAlive(turn)); }
+    } else if (++q.resT > 55) { qte = null; if (q.ok) startWheel(); else endShot(); }
   }
 
   if (state === 'wheel') {
@@ -1361,7 +1520,7 @@ function updateGame() {
       { const tw = tanks[turn]; if (tw.stock.length < STOCK_MAX) tw.stock.push(SPECIALS[wheel.idx]); }   // into the stockpile
       emit({t: 'conf', x: W / 2, y: H / 2, n: 90, sp: 7}); emit({t: 'sfx', n: 'prize'});
     }
-    if (wheel.t > wheel.spin + 130) { wheel = null; beginTurn(nextAlive(turn)); }
+    if (wheel.t > wheel.spin + 130) { wheel = null; endShot(); }
   }
 
   if (state === 'settle' && --aiTimer <= 0) {
@@ -1381,7 +1540,7 @@ function updateGame() {
       } else if (hit[turn] && tanks[turn].hp > 0) {
         hit = [false, false, false, false];
         startQuick();
-      } else beginTurn(nextAlive(turn));
+      } else endShot();
     }
   }
   if (state === 'over' && T % 6 === 0 && winner >= 0) confetti(rnd(0, W), -10, 3, 2);
@@ -1493,11 +1652,16 @@ function hostData(conn, d) {
   if (!c || mode !== 'play' || !d) return;
   const t = tanks[c.seat];
   if (d.t === 'qk' && t && !t.ai && state === 'quick' && turn === c.seat && typeof d.k === 'string') qteKey(d.k.slice(0, 1).toLowerCase());
-  if ((d.t === 'in' || d.t === 'fire') && t && !t.ai && state === 'aim' && turn === c.seat) {
-    t.angle = clamp(+d.a || 0, 0, 180); t.power = clamp(+d.p || 0, 5, 100);
-    if (d.w >= 0 && d.w < WEAPONS.length && t.ammo[d.w | 0] > 0) t.weapon = d.w | 0;
-    if (Number.isInteger(d.sp) && d.sp >= -1 && d.sp < t.stock.length) t.armed = d.sp;
-    const dx = clamp((+d.x) - t.x, -30, 30);
+  const aiming = state === 'aim', moving = state === 'move', frozen = t && t.status && t.status.id === 'frozen';
+  if (d.t === 'end' && t && !t.ai && moving && turn === c.seat) { endMove(); return; }
+  if (((d.t === 'in' && (aiming || moving)) || (d.t === 'fire' && aiming)) && t && !t.ai && turn === c.seat) {
+    if (aiming) {
+      if (!frozen) t.angle = clamp(+d.a || 0, 0, 180);
+      t.power = clamp(+d.p || 0, 5, 100);
+      if (d.w >= 0 && d.w < WEAPONS.length && t.ammo[d.w | 0] > 0) t.weapon = d.w | 0;
+      if (Number.isInteger(d.sp) && d.sp >= -1 && d.sp < t.stock.length) t.armed = d.sp;
+    }
+    const dx = frozen ? 0 : clamp((+d.x) - t.x, -30, 30);
     if (dx && t.fuel > 0) {
       const nx = clamp(t.x + dx, 14, WW - 14), cost = Math.abs(nx - t.x) / 0.8 * 0.5;
       if (cost <= t.fuel + 0.01) { t.fuel -= cost; t.x = nx; }
@@ -1510,7 +1674,7 @@ function netBroadcast() {
     k: tanks.map(t => [r1(t.x), r1(t.y), Math.round(t.hp), r1(t.angle), r1(t.power), t.weapon, r1(t.fuel),
                        t.stock.map(s => ALLW.indexOf(s)), t.ammo.map(a => a === Infinity ? -1 : a), t.status ? STATUSES.indexOf(t.status) : -1, t.armed]),
     sh: shots.map(s => [s.id, r1(s.x), r1(s.y), Math.round(s.vx * 1000) / 1000, Math.round(s.vy * 1000) / 1000, ALLW.indexOf(s.w), s.drilling ? 1 : 0]),
-    wh: wheel ? [wheel.t, wheel.idx, wheel.spin] : null, tl: turnLeft,
+    wh: wheel ? [wheel.t, wheel.idx, wheel.spin] : null, tl: turnLeft, ss: state === 'over' ? stats.map(s => [s.shots, s.hits, s.dmg, s.kills]) : undefined,
     q: qte ? [qte.seq.join(''), qte.idx, qte.t, qte.limit, qte.done ? 1 : 0, qte.ok ? 1 : 0, qte.resT, qte.msg] : null};
   if (evq.length) { m.ev = evq; evq = []; }
   if (terrainDirty && (!sandActive || T % 6 === 0)) { m.g = Array.from(ground, v => Math.round(v * 10)); terrainDirty = false; }   // while sand slides: 10 Hz; the final resting shape goes out immediately
@@ -1564,8 +1728,8 @@ function clientData(m) {
 function fail2(msg) { leaveRoom(msg || 'Could not join.'); menuStage = 'join'; }
 
 function startClientRound(m) {
-  numPlayers = m.np; makeScene(m.th, m.g); teamMode = !!m.tm;
-  caves = (m.cv || []).map(([x, w, top, h]) => ({x, w, top, h, age: 0, applied: 0, falling: false}));
+  numPlayers = m.np; makeScene(m.th, m.g); teamMode = !!m.tm; resetStats();
+  caves = (m.cv || []).map(([x, w, top, h]) => newCave(x, w, top, h)); saucers = [];
   tanks = m.ai.map((ai, i) => {
     const [model, color, team] = (m.lo && m.lo[i]) || [0, COLORS[i], i % 2], M = TANKS[model];
     return {i, x: 0, y: 0, tx: 0, ty: 0, ta: 55, tp: 55, init: false, model, team, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 55, power: 55,
@@ -1576,9 +1740,10 @@ function startClientRound(m) {
 }
 function applySnap(m) {
   if (mode !== 'play' || !tanks.length) return;
-  const prevMine = state === 'aim' && turn === net.seat;
+  const prevMine = (state === 'aim' || state === 'move') && turn === net.seat;
+  if (m.ss) stats = m.ss.map(([shots, hits, dmg, kills]) => ({shots, hits, dmg, kills}));
   state = m.st; turn = m.tn; wind = m.w; winner = m.wn; winTeam = m.wt; wins = m.ws; turnLeft = m.tl || 0;
-  const nowMine = state === 'aim' && turn === net.seat;
+  const nowMine = (state === 'aim' || state === 'move') && turn === net.seat;
   if (state !== 'aim') net.sent = false;
   if (m.g) for (let x = 0; x < WW; x++) {
     const nv = m.g[x] / 10;
@@ -1614,9 +1779,9 @@ function updateClient() {
   updateFx();
   if (!tanks.length) return;
   updateCaves(false);
-  const mine = state === 'aim' && turn === net.seat;
+  const mine = (state === 'aim' || state === 'move') && turn === net.seat;
   for (const t of tanks) {
-    if (mine && t.i === net.seat) { humanControl(t); t.y = ground[clamp(Math.floor(t.x), 0, WW - 1)] - 4; }
+    if (mine && t.i === net.seat) { humanControl(t, state === 'move'); t.y = ground[clamp(Math.floor(t.x), 0, WW - 1)] - 4; }
     else if (t.init) { t.x = lerp(t.x, t.tx, .5); t.y = lerp(t.y, t.ty, .5); t.angle = lerp(t.angle, t.ta, .4); t.power = lerp(t.power, t.tp, .4); }
     tankCosmetics(t);
   }
@@ -1656,7 +1821,7 @@ function terrainSig() {
   for (let x = 0; x < WW; x++) s += ground[x] * ((x & 15) + 1) + veg[x] * ((x & 7) + 1);
   if (scorches.length) { const l = scorches[scorches.length - 1]; s += l.x * 3 + l.y * 5; }
   for (const tn of tunnels) s += tn.length * 17;
-  for (const c of caves) if (c.falling) s += Math.min(c.age, CAVE_FRAMES + 1) * ((c.x | 0) + 1);
+  for (const c of caves) s += c.hp * 13 + (c.falling ? Math.min(c.age, CAVE_FRAMES + 1) * ((c.x | 0) + 1) : 0);
   return s;
 }
 function drawTerrain() {
@@ -2000,12 +2165,12 @@ function drawBeams() {
 function drawWorld(actors) {
   ctx.save();
   if (shake) ctx.translate(rnd(-shake, shake), rnd(-shake, shake));
-  drawBackdrop(); if (!theme.rain && !theme.dust) drawWindStreaks(); drawTerrain();
+  drawBackdrop(); if (!theme.rain && !theme.dust) drawWindStreaks(); drawTerrain(); drawAliens();
   for (const t of actors) if (t.hp <= 0) drawTank(t, false);
-  for (const t of actors) if (t.hp > 0) drawTank(t, mode === 'play' && state === 'aim' && t.i === turn);
+  for (const t of actors) if (t.hp > 0) drawTank(t, mode === 'play' && (state === 'aim' || state === 'move') && t.i === turn);
   for (const t of actors) if (t.hp > 0 && t.status) drawStatusFx(t);
   if (mode === 'play' && state === 'aim' && !paused) drawAimHelpers(tanks[turn]);
-  drawShots(); if (mode !== 'play') drawMenuShells(); drawParts(); drawBeams(); drawRainAndDust();
+  drawSaucers(); drawShots(); if (mode !== 'play') drawMenuShells(); drawParts(); drawBeams(); drawRainAndDust();
   ctx.restore();
   if (boltFlash > .03) { ctx.fillStyle = `rgba(215,228,255,${boltFlash * .3})`; ctx.fillRect(0, 0, WW, WH); }   // lightning lights up the field
   drawGrain();
@@ -2078,11 +2243,11 @@ function drawControlPanel() {
   text('ANGLE', gx, y0 + 12, 10, 'rgba(255,255,255,.55)', 'center', '800');
   // power
   const px = 240, pw = 284, st = t.status, eff = shotPower(t), dial = Math.round(t.power);
-  if (st) {   // status effect: this shot fires at half power — show the dial value AND what actually comes out
+  if (st && st.id === 'shorted') {   // EMP: this shot fires at half power — show the dial value AND what actually comes out
     text(`POWER ×½ — ${st.icon} ${st.name}`, px, y0 + 16, 11, st.color, 'left', '900');
     text(`${dial} → ${Math.round(eff)}`, px + pw, y0 + 16, 18, st.color, 'right', '800');
   } else {
-    text('POWER', px, y0 + 16, 11, INK_DIM, 'left', '800');
+    text(st ? `POWER — ${st.icon} ${st.name}: ${st.short}` : 'POWER', px, y0 + 16, 11, st ? st.color : INK_DIM, 'left', st ? '900' : '800');
     text(String(dial), px + pw, y0 + 16, 18, INK, 'right', '800');
   }
   // 20 segments of exactly 5 power each; the last one fills part-way, so the bar always matches the number
@@ -2124,16 +2289,17 @@ function drawControlPanel() {
   } else { text('SUPPLY', x3 + 48, sy + 22, 11, 'rgba(230,224,196,.3)', 'center', '800'); text('earned by hits', x3 + 48, sy + 42, 10, 'rgba(230,224,196,.3)', 'center'); }
   // fire button
   const mineT = isMine(t) && !t.ai;
-  const fx = x + w - 92, ready = state === 'aim' && mineT, p = ready ? 1 + Math.sin(T * .12) * .03 : 1;
+  const fx = x + w - 92, moving = state === 'move' && mineT, ready = (state === 'aim' && mineT) || moving, p = ready ? 1 + Math.sin(T * .12) * .03 : 1;
   ctx.save(); ctx.translate(fx + 40, sy + 30); ctx.scale(p, p);
   if (ready) halo(-40, -30, 80, 60, 12, col);
-  rr(-40, -30, 80, 60, 12); ctx.fillStyle = ready ? col : 'rgba(255,255,255,.08)'; ctx.fill(); noGlow();
-  if (ready) { hazard(-40, -30, 80, 8, .9); hazard(-40, 22, 80, 8, .9); }   // warning stripes on an armed trigger
-  text(t.ai ? 'CPU' : mineT ? 'FIRE' : 'WAIT', 0, -6, 17, ready ? inkOn(col) : 'rgba(255,255,255,.45)', 'center', '900');
-  text(t.ai ? (state === 'aim' ? 'thinking…' : '') : mineT ? 'SPACE' : 'their turn', 0, 14, 10, ready ? 'rgba(0,0,0,.6)' : 'rgba(255,255,255,.4)', 'center', '800');
+  rr(-40, -30, 80, 60, 12); ctx.fillStyle = moving ? '#c9b98a' : ready ? col : 'rgba(255,255,255,.08)'; ctx.fill(); noGlow();
+  if (ready && !moving) { hazard(-40, -30, 80, 8, .9); hazard(-40, 22, 80, 8, .9); }   // warning stripes on an armed trigger
+  text(moving ? 'END TURN' : t.ai ? 'CPU' : mineT ? 'FIRE' : 'WAIT', 0, -6, moving ? 14 : 17, moving ? '#1d1a10' : ready ? inkOn(col) : 'rgba(255,255,255,.45)', 'center', '900');
+  text(moving ? 'ENTER' : t.ai ? (state === 'aim' ? 'thinking…' : '') : mineT ? 'SPACE' : 'their turn', 0, 14, 10, ready ? 'rgba(0,0,0,.6)' : 'rgba(255,255,255,.4)', 'center', '800');
   ctx.restore();
+  if (moving) uiButtons.push({x: fx, y: sy, w: 80, h: 60, tap: () => requestEndMove()});
   // mouse shortcuts (only for the tank this machine controls, while aiming)
-  if (ready) {
+  if (ready && !moving) {
     uiButtons.push({x: gx - gr - 6, y: gy - gr - 8, w: gr * 2 + 12, h: gr + 22, drag: (mx, my) => {
       const a = Math.atan2(gy - my, mx - gx) * 180 / Math.PI;
       t.angle = clamp(a < 0 ? (mx < gx ? 180 : 0) : a, 0, 180);
@@ -2154,14 +2320,14 @@ const AMMO_INFO = {
   'Drill':    'Bores straight through the earth instead of exploding on impact. Punch through a hill at a tank behind it, or drill into a cavern to collapse it. 2 per round.',
   'NUKE':     'An enormous blast that flattens everything nearby and whites out the screen.',
   'MIRV':     'Splits into five warheads at the top of its arc, blanketing a wide area.',
-  'AIRSTRIKE':'Where it lands, six bombs fall from the sky in a line across the target.',
+  'LUCKY 7':  'Fires seven shells at once: your shot plus three just above it and three just below, in a tight group. On target, several of them hit.',
   'TELEPORT': 'Doesn\'t explode: your tank warps to wherever the shell lands. Great for escaping or flanking.',
   'DIRT BOMB':'No damage. Dumps a mound of sand that can bury enemy tanks or build you cover.',
   'ORBITAL':  'Marks the spot with a beacon. One second later a satellite laser strikes straight down, hitting every tank in that column and drilling a deep shaft.',
   'BOUNCER':  'Skips along the ground three times, exploding at each bounce before the final blast.',
   'VAMPIRE':  'All the damage it deals to enemies is added back to your own armor.',
 };
-const STATUS_INFO = st => `Hits like a missile and leaves every tank in the blast ${st.name}: their next shot fires at HALF POWER, then the effect wears off.`;
+const STATUS_INFO = st => `Hits like a missile and leaves every tank in the blast ${st.name} for their next turn: ${({burning: 'the fire burns 15 armor off when that turn starts', frozen: 'their barrel and tracks are frozen, so they can only change power', shorted: 'their shot fires at HALF POWER', corroded: 'every hit on them does 50% more damage'})[st.id]}. Then it wears off.`;
 function ammoList() { return [...WEAPONS.map(w => ({w, special: false})), ...SPECIALS.map(w => ({w, special: true}))]; }
 function wrapText(str, maxW, size, weight = '600') {
   ctx.font = `${weight} ${size}px ${FONT}`;
@@ -2183,7 +2349,7 @@ function drawInfoCard() {
   panel(x, y, w, h, 10);
   // controls (two rows of key chips)
   const rows = [[['← →', 'Aim'], ['↑ ↓', 'Power'], ['Shift', 'Fine'], ['A D', 'Drive'], ['1-4', 'Weapon'], ['Space', 'Fire']],
-                [['A S D F', 'Auth code'], ['Q', 'Supply'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
+                [['A S D F', 'Auth code'], ['Q', 'Supply'], ['Enter', 'End turn'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
   rows.forEach((row, r) => {
     let cx = x + 12; const cy = y + 14 + r * 20;
     for (const [k, d] of row) {
@@ -2328,20 +2494,31 @@ function drawOver() {
   ctx.fillStyle = 'rgba(8,10,5,.62)'; ctx.fillRect(0, 0, W, H);
   const teamWin = teamMode && winTeam >= 0;
   const col = teamWin ? TEAMS[winTeam].color : winner >= 0 ? tanks[winner].color : '#fff';
-  ctx.save(); glow(col, 28); panel(W / 2 - 300, 150, 600, 200, 24, col, 3); noGlow(); ctx.restore();
-  text(winner >= 0 ? '🏆' : '🤝', W / 2, 200, 44, '#fff', 'center');
-  text(teamWin ? `TEAM ${TEAMS[winTeam].name} HOLDS THE FIELD` : winner >= 0 ? `UNIT 0${winner + 1} HOLDS THE FIELD` : 'STALEMATE', W / 2, 262, 38, col, 'center', '900', 'rgba(0,0,0,.6)');
-  const n = tanks.length, sw = 120, x0 = W / 2 - (n * sw) / 2;
+  const py = 110, ph = 330;
+  halo(W / 2 - 320, py, 640, ph, 24, col); panel(W / 2 - 320, py, 640, ph, 24, col, 3);
+  text(winner >= 0 ? '🏆' : '🤝', W / 2, py + 40, 40, '#fff', 'center');
+  text(teamWin ? `TEAM ${TEAMS[winTeam].name} HOLDS THE FIELD` : winner >= 0 ? `UNIT 0${winner + 1} HOLDS THE FIELD` : 'STALEMATE', W / 2, py + 92, 34, col, 'center', '900');
+  // after-action report
+  const cols = [['UNIT', W / 2 - 270, 'left'], ['WINS', W / 2 - 80, 'center'], ['DAMAGE', W / 2 + 20, 'center'], ['ACCURACY', W / 2 + 130, 'center'], ['KILLS', W / 2 + 240, 'center']];
+  const hy = py + 140;
+  text('AFTER-ACTION REPORT', W / 2, hy - 18, 11, '#d4a417', 'center', '900');
+  cols.forEach(([h, x, a]) => text(h, x, hy + 8, 10, INK_DIM, a, '800'));
+  ctx.fillStyle = 'rgba(214,204,150,.25)'; ctx.fillRect(W / 2 - 280, hy + 20, 560, 1);
+  const best = Math.max(...tanks.map((t, i) => (stats[i] || {}).dmg || 0));
   tanks.forEach((t, i) => {
-    const x = x0 + i * sw + sw / 2;
-    if (teamMode) { ctx.fillStyle = TEAMS[t.team].color; ctx.fillRect(x - 40, 332, 80, 3); }   // team underline
-    ctx.fillStyle = t.color; ctx.beginPath(); ctx.arc(x - 24, 316, 11, 0, TAU); ctx.fill();
-    text(`0${i + 1}`, x - 24, 317, 11, inkOn(t.color), 'center', '900');
-    text('★ ' + wins[i], x + 4, 317, 17, '#fcd34d', 'left', '800');
+    const y = hy + 42 + i * 30, s = stats[i] || {shots: 0, hits: 0, dmg: 0, kills: 0};
+    if (teamMode) { ctx.fillStyle = TEAMS[t.team].color; ctx.fillRect(W / 2 - 282, y - 10, 3, 20); }
+    ctx.fillStyle = t.color; ctx.beginPath(); ctx.arc(W / 2 - 258, y, 10, 0, TAU); ctx.fill();
+    text(`0${i + 1}`, W / 2 - 258, y + 1, 10, inkOn(t.color), 'center', '900');
+    text(TANKS[t.model || 0].name + (t.ai ? ' · CPU' : ''), W / 2 - 240, y + 1, 13, t.hp > 0 ? INK : INK_DIM, 'left', '800');
+    text('★ ' + wins[i], cols[1][1], y + 1, 14, '#fcd34d', 'center', '800');
+    text(String(s.dmg), cols[2][1], y + 1, 14, s.dmg && s.dmg === best ? '#9cc255' : INK, 'center', '800');
+    text(s.shots ? `${Math.round(s.hits / s.shots * 100)}%  (${s.hits}/${s.shots})` : '—', cols[3][1], y + 1, 13, INK, 'center', '700');
+    text(String(s.kills), cols[4][1], y + 1, 14, s.kills ? '#ff8a6b' : INK_DIM, 'center', '800');
   });
   const hint = net && net.role === 'client' ? 'Waiting for the host to start the next round…     ·     ESC  leave'
     : `ENTER  next round     ·     ESC  ${net ? 'close room' : 'main menu'}`;
-  text(hint, W / 2, 395, 16, '#fff', 'center', '700', 'rgba(0,0,0,.6)');
+  text(hint, W / 2, py + ph + 30, 16, '#fff', 'center', '700', 'rgba(0,0,0,.6)');
 }
 
 // ====================================================== drawing: menu
@@ -2889,6 +3066,7 @@ addEventListener('keydown', e => {
     if ('asdf'.includes(k) && k.length === 1 && !e.repeat && !t.ai && isMine(t)) pressCombo(k);
     return;
   }
+  if (state === 'move' && !t.ai && isMine(t) && (k === 'enter' || k === 'e') && !e.repeat) { requestEndMove(); return; }
   if (state === 'aim' && !t.ai && isMine(t)) {
     if (k === ' ' && !e.repeat) tryFire();
     const n = '1234'.indexOf(k);
