@@ -68,7 +68,7 @@ let wind = 0, turn = 0, state = 'aim', wins = [0, 0, 0, 0], winner = -1;
 let theme = THEMES[0], bgCanvas, texCanvas, clouds = [], stars = [], streaks = [], menuTanks = [];
 let numPlayers = 2, numHumans = 1, menuStage = 'home';
 let mode = 'menu', paused = false, assist = true, muted = false;
-const TURN_SECONDS = 45, QTE_FRAMES = 120;   // 2-second key combo after a hit
+const TURN_SECONDS = 45, QTE_FRAMES = 60;   // 1-second key combo after a hit
 let qte = null;
 const shuffled = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 let turnFrames = 0, turnLeft = 0;
@@ -525,8 +525,8 @@ function updateGame() {
     const q = qte;
     if (!q.done) {
       q.t++;
-      if (tanks[turn].ai && !q.ai) q.ai = {next: 30, failAt: Math.random() < .75 ? -1 : Math.floor(rnd(1, 4))};   // CPU nails it ~75% of the time
-      if (q.ai && --q.ai.next <= 0) { qteKey(q.idx === q.ai.failAt ? 'x' : q.seq[q.idx]); q.ai.next = Math.floor(rnd(16, 28)); }
+      if (tanks[turn].ai && !q.ai) q.ai = {next: 14, failAt: Math.random() < .65 ? -1 : Math.floor(rnd(1, 4))};   // CPU nails it ~65% of the time
+      if (q.ai && --q.ai.next <= 0) { qteKey(q.idx === q.ai.failAt ? 'x' : q.seq[q.idx]); q.ai.next = Math.floor(rnd(8, 13)); }
       if (!q.done && q.t > q.limit) qteEnd(false, 'TOO SLOW!');
     } else if (++q.resT > 55) { qte = null; if (q.ok) startWheel(); else beginTurn(nextAlive(turn)); }
   }

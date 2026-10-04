@@ -8,7 +8,7 @@ A Scorched Earth-style artillery game that runs in a single HTML file. No build 
 - **Online multiplayer:** host a room, share the invite link or 5-letter code, friends join from their own browsers
 - Local hot-seat play on one screen is still there too
 - Destructible terrain, wind, and three weapons (Missile, Big Bomb, Triple)
-- Land a hit, then nail a 2-second W-A-S-D key combo to spin the prize wheel for a one-shot special attack:
+- Land a hit, then nail a 1-second W-A-S-D key combo to spin the prize wheel for a one-shot special attack:
   Nuke, MIRV, Dirt Bomb, Bouncer, Airstrike, Teleport, Vampire
 
 ## Online play
@@ -30,6 +30,6 @@ If someone drops, their tank becomes a CPU.
 | A D | Drive (limited fuel) |
 | 1 2 3 | Choose weapon |
 | Space | Fire |
-| W A S D | After a hit: press the 4 keys shown, in order, within 2 s |
+| W A S D | After a hit: press the 4 keys shown, in order, within 1 s |
 | T / M / P | Aim assist / sound / pause (offline only) |
 | Esc | Menu / leave room |
