@@ -309,16 +309,27 @@ function renderBG() {
   theme.sky.forEach((col, i) => sk.addColorStop(i / (theme.sky.length - 1), col));
   g.fillStyle = sk; g.fillRect(0, 0, WW, WH);
   const s = theme.sun, sx = s.x * WW, sy = s.y * WH;
+  const bloom = g.createRadialGradient(sx, sy, 0, sx, sy, s.r * 18);   // wide atmospheric bloom around the sun / moon
+  bloom.addColorStop(0, s.glow); bloom.addColorStop(.25, s.glow.replace(/[\d.]+\)$/, m => (parseFloat(m) * .35).toFixed(2) + ')')); bloom.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = bloom; g.fillRect(0, 0, WW, WH);
   const gl = g.createRadialGradient(sx, sy, 0, sx, sy, s.r * 6);
   gl.addColorStop(0, s.glow); gl.addColorStop(1, 'rgba(255,255,255,0)');
   g.fillStyle = gl; g.fillRect(0, 0, WW, WH);
   g.fillStyle = s.c; g.beginPath(); g.arc(sx, sy, s.r, 0, TAU); g.fill();
   if (theme.moon) { g.fillStyle = 'rgba(120,130,170,.35)'; for (let i = 0; i < 6; i++) { g.beginPath(); g.arc(sx + rnd(-s.r * .6, s.r * .6), sy + rnd(-s.r * .6, s.r * .6), rnd(2, 6), 0, TAU); g.fill(); } }
+  // mountain ranges: rugged fractal ridgelines, lighter and hazier with distance, shaded toward their feet
+  const seed = rnd(0, 1000), noise1 = x => { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return lerp(hash01(i * 1.37 + seed), hash01((i + 1) * 1.37 + seed), u) * 2 - 1; };
+  const ridge = (x, o) => { let y = 0, amp = 1, fr = 1; for (let k = 0; k < 6; k++) { y += amp * (1 - Math.abs(noise1(x * fr + o * 91.7 + k * 13.3))); amp *= .5; fr *= 2.05; } return y / 1.97; };
   theme.mtn.forEach((col, li) => {
-    const base = WH * (.56 + li * .07), amp = (130 - li * 30) * S, p1 = rnd(0, 9), p2 = rnd(0, 9);
-    g.fillStyle = col; g.beginPath(); g.moveTo(0, WH);
-    for (let x = 0; x <= WW + 8; x += 8) g.lineTo(x, base - amp * (Math.abs(Math.sin(x * .005 / S * (li + 1) + p1)) * .7 + Math.abs(Math.sin(x * .014 / S + p2)) * .3));
-    g.lineTo(WW, WH); g.fill();
+    const base = WH * (.56 + li * .07), amp = (150 - li * 34) * S, fx = (.0016 + li * .0009) / S;
+    let peak = WH;
+    const ys = []; for (let x = 0; x <= WW + 6; x += 6) { const y = base - amp * Math.pow(ridge(x * fx, li), 1.6); ys.push(y); peak = Math.min(peak, y); }
+    const mg = g.createLinearGradient(0, peak, 0, base + 40);
+    mg.addColorStop(0, shade(col, .16)); mg.addColorStop(1, shade(col, -.18));
+    g.fillStyle = mg; g.beginPath(); g.moveTo(0, WH); ys.forEach((y, k) => g.lineTo(k * 6, y)); g.lineTo(WW, WH); g.fill();
+    const hz = g.createLinearGradient(0, base - amp * .3, 0, base + 60);   // valley haze settling in front of each range
+    hz.addColorStop(0, `rgba(${theme.haze},0)`); hz.addColorStop(1, `rgba(${theme.haze},${.22 - li * .06})`);
+    g.fillStyle = hz; g.fillRect(0, base - amp * .3, WW, amp * .3 + 60);
   });
   // distant war-torn skyline: shelled buildings, dead trees, utility poles, burning wrecks with smoke columns
   const base = WH * .6;
@@ -361,22 +372,52 @@ function renderBG() {
   return c;
 }
 
-function renderTex() {
+function renderTex() {   // realistic soil detail, made once: light/dark only, so it works over every theme's soil colour
   const c = document.createElement('canvas'); c.width = WW; c.height = WH;
   const g = c.getContext('2d');
-  for (let i = 0; i < 20000; i++) { g.fillStyle = Math.random() < .5 ? 'rgba(0,0,0,.10)' : 'rgba(255,255,255,.06)'; g.fillRect(rnd(0, WW), rnd(0, WH), rnd(1, 3), rnd(1, 3)); }
-  for (let i = 0; i < 200; i++) {
-    g.fillStyle = Math.random() < .5 ? 'rgba(0,0,0,.14)' : 'rgba(255,255,255,.08)';
-    g.beginPath(); g.ellipse(rnd(0, WW), rnd(GROUND_MIN, WH), rnd(3, 9), rnd(2, 5), rnd(0, 3), 0, TAU); g.fill();
+  // 1) fractal mottling: random grids at several scales, smoothly upscaled and stacked (cheap value-noise fBm)
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  for (const [cols, alpha] of [[36, .30], [80, .22], [190, .16], [460, .12]]) {
+    const rows = Math.ceil(cols * WH / WW), o = document.createElement('canvas'); o.width = cols; o.height = rows;
+    const og = o.getContext('2d'), id = og.createImageData(cols, rows);
+    for (let i = 0; i < id.data.length; i += 4) {
+      const v = Math.random() * 2 - 1, light = v > 0;
+      id.data[i] = light ? 255 : 22; id.data[i + 1] = light ? 236 : 14; id.data[i + 2] = light ? 200 : 6;
+      id.data[i + 3] = Math.abs(v) * 255 * alpha;
+    }
+    og.putImageData(id, 0, 0); g.drawImage(o, 0, 0, WW, WH);
   }
-  for (let i = 0; i < 70; i++) {   // buried boulders: dark body, lit top edge
-    const x = rnd(0, WW), y = rnd(GROUND_MIN + 60, WH), rx = rnd(9, 24), ry = rx * rnd(.45, .7), rot = rnd(-.4, .4);
-    g.fillStyle = 'rgba(0,0,0,.2)'; g.beginPath(); g.ellipse(x, y, rx, ry, rot, 0, TAU); g.fill();
-    g.strokeStyle = 'rgba(255,240,210,.09)'; g.lineWidth = 2; g.beginPath(); g.ellipse(x, y, rx, ry, rot, Math.PI * 1.1, Math.PI * 1.9); g.stroke();
+  // 2) fine grit: single-pixel specks across the whole soil
+  const id = g.getImageData(0, 0, WW, WH), d = id.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = Math.random();
+    if (r < .06) { const a = 18 + Math.random() * 40; d[i] = d[i] * .7; d[i + 1] = d[i + 1] * .7; d[i + 2] = d[i + 2] * .7; d[i + 3] = Math.min(255, d[i + 3] + a); }
+    else if (r < .08) { d[i] = 255; d[i + 1] = 240; d[i + 2] = 210; d[i + 3] = Math.min(255, d[i + 3] + 12 + Math.random() * 22); }
   }
-  for (let i = 0; i < 40; i++) {   // old roots / cracks
-    let x = rnd(0, WW), y = rnd(GROUND_MIN + 40, WH); g.strokeStyle = 'rgba(0,0,0,.14)'; g.lineWidth = rnd(1, 2.2); g.beginPath(); g.moveTo(x, y);
-    for (let k = 0; k < 5; k++) { x += rnd(-14, 14); y += rnd(4, 14); g.lineTo(x, y); }
+  g.putImageData(id, 0, 0);
+  // 3) soft sediment layers deep down (gentle, irregular bands rather than cartoon stripes)
+  for (let k = 0; k < 9; k++) {
+    const y0 = GROUND_MIN + 50 + k * 72 + rnd(-15, 15), th = rnd(10, 28), dark = k % 2 === 0;
+    g.fillStyle = dark ? `rgba(20,12,4,${rnd(.05, .09).toFixed(3)})` : `rgba(255,236,200,${rnd(.03, .06).toFixed(3)})`;
+    g.beginPath();
+    for (let x = 0; x <= WW; x += 16) g.lineTo(x, y0 + Math.sin(x * .004 + k * 2.1) * 14 + Math.sin(x * .017 + k) * 5);
+    for (let x = WW; x >= 0; x -= 16) g.lineTo(x, y0 + th + Math.sin(x * .005 + k * 1.3) * 10);
+    g.closePath(); g.fill();
+  }
+  // 4) pebbles and buried rocks, lit from above with a shadow underneath
+  for (let i = 0; i < 650; i++) {
+    const big = Math.random() < .035, x = rnd(0, WW), y = rnd(GROUND_MIN - 40, WH), rx = big ? rnd(7, 18) : rnd(1.2, 4), ry = rx * rnd(.55, .8), rot = rnd(-.5, .5);
+    const tone = rnd(70, 150) | 0;
+    g.fillStyle = 'rgba(0,0,0,.2)'; g.beginPath(); g.ellipse(x + rx * .25, y + ry * .45, rx, ry, rot, 0, TAU); g.fill();   // shadow
+    const pg = g.createRadialGradient(x - rx * .35, y - ry * .45, 0, x, y, rx * 1.1);
+    pg.addColorStop(0, `rgba(${tone + 60},${tone + 52},${tone + 40},.62)`); pg.addColorStop(1, `rgba(${tone * .45 | 0},${tone * .4 | 0},${tone * .32 | 0},.62)`);
+    g.fillStyle = pg; g.beginPath(); g.ellipse(x, y, rx, ry, rot, 0, TAU); g.fill();
+  }
+  // 5) old roots and hairline cracks
+  for (let i = 0; i < 60; i++) {
+    let x = rnd(0, WW), y = rnd(GROUND_MIN + 20, WH); g.strokeStyle = `rgba(18,10,4,${rnd(.12, .22).toFixed(2)})`; g.lineWidth = rnd(.8, 1.8);
+    g.beginPath(); g.moveTo(x, y);
+    for (let k = 0; k < 7; k++) { x += rnd(-12, 12); y += rnd(3, 11); g.lineTo(x, y); }
     g.stroke();
   }
   return c;
@@ -851,10 +892,10 @@ function confetti(x, y, n, spread = 6) {   // interface-space particles, drawn a
 function explosionFx(x, y, r, color) {
   flashes.push({x, y, r: r * 1.9, life: 10, max: 10});
   rings.push({x, y, r0: r * .3, r1: r * 2.2, life: 24, max: 24, color: 'rgba(255,230,170,1)', w: 4});
-  rings.push({x, y, r0: r * .2, r1: r * 1.5, life: 18, max: 18, color: 'rgba(255,255,255,1)', w: 2});
-  burst(x, y, r * 1.4, {type: 'fire', s0: .6, s1: 2.2 + r / 22, l0: 20, l1: 42, z0: 4, z1: 9, drag: .94, g: -.012});
+  burst(x, y, r * 1.4, {type: 'fire', s0: .6, s1: 2.2 + r / 22, l0: 20, l1: 42, z0: 5, z1: 11, drag: .94, g: -.012});
+  burst(x, y - 4, r * .35 + 2, {type: 'fire', s0: .1, s1: .9, l0: 16, l1: 28, z0: r * .25 + 4, z1: r * .4 + 6, drag: .9, g: -.02});   // the core fireball
   burst(x, y, r * .55, {type: 'spark', s0: 2, s1: 7 + r / 18, l0: 30, l1: 60, z0: 1, z1: 2, drag: .985, g: .1});
-  burst(x, y, r / 4 + 3, {type: 'smoke', s0: .3, s1: 1.6, l0: 60, l1: 110, z0: 7, z1: 13, drag: .975, g: -.025, up: -.4});
+  burst(x, y, r / 3 + 4, {type: 'smoke', s0: .3, s1: 1.6, l0: 80, l1: 170, z0: 8, z1: 16, drag: .975, g: -.03, up: -.5});   // a dark column that lingers
   for (let i = 0; i < r * .55; i++) addP({type: 'dirt', x: x + rnd(-r * .5, r * .5), y, vx: rnd(-3, 3), vy: -rnd(1, 5.5), g: .13, life: rnd(40, 80), size: rnd(2, 4.5), color: pick(theme.dirt)});
   shake = Math.max(shake, Math.min(22, r / 5));
   if (r > 100) whiteFlash = .85;
@@ -1959,44 +2000,58 @@ function paintTerrain() {
   g.addColorStop(0, theme.dirt[0]); g.addColorStop(.45, theme.dirt[1]); g.addColorStop(1, theme.dirt[2]);
   ctx.fillStyle = g; ctx.fill(); ctx.clip();
   ctx.drawImage(texCanvas, 0, 0);
-  for (let k = 0; k < 6; k++) {   // rock strata: wavy sediment bands deep in the ground
-    const y0 = GROUND_MIN + 30 + k * 75;
-    ctx.beginPath();
-    for (let x = 0; x <= WW; x += 12) { const y = y0 + Math.sin(x * .009 + k * 1.7) * 12 + Math.sin(x * .027 + k) * 5; x ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
-    ctx.strokeStyle = 'rgba(0,0,0,.19)'; ctx.lineWidth = 7 + k; ctx.stroke();
-    ctx.save(); ctx.translate(0, -5 - k * .5); ctx.strokeStyle = 'rgba(255,240,200,.07)'; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+  const top = () => { ctx.beginPath(); for (let x = 0; x < WW; x += 2) x ? ctx.lineTo(x, ground[x]) : ctx.moveTo(0, ground[0]); ctx.lineTo(WW, ground[WW - 1]); };
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  // topsoil: a darker, richer layer just under the surface that fades out with depth
+  for (const [dy, w, a] of [[30, 60, .09], [14, 28, .12], [5, 10, .10]]) { ctx.save(); ctx.translate(0, dy); top(); ctx.strokeStyle = `rgba(22,13,5,${a})`; ctx.lineWidth = w; ctx.stroke(); ctx.restore(); }
+  // sunlight on the slopes: faces turned toward the sun catch light, faces turned away fall into shade; hollows go darker
+  // (columns are sorted into a few shade levels and each level is filled in one go, so a repaint stays cheap)
+  const sunLeft = theme.sun.x < .5, LV = 6, litP = [], shadeP = [], holeP = [];
+  for (let k = 0; k < LV; k++) { litP.push(new Path2D()); shadeP.push(new Path2D()); holeP.push(new Path2D()); }
+  for (let x = 3; x < WW - 3; x += 2) {
+    const slope = (ground[x + 3] - ground[x - 3]) / 6, lit = clamp(sunLeft ? -slope : slope, -1, 1) * 1.4;
+    const hollow = (ground[x - 10] + ground[x + 10]) / 2 - ground[x];   // negative in a dip
+    if (lit > .05) litP[Math.min(LV - 1, lit * 1.2 * LV | 0)].rect(x, ground[x], 2, 18);
+    else if (lit < -.05) shadeP[Math.min(LV - 1, -lit * 1.25 * LV | 0)].rect(x, ground[x], 2, 26);
+    if (hollow < -2) holeP[Math.min(LV - 1, -hollow * .055 * LV / 6 | 0)].rect(x, ground[x], 2, 34);
   }
-  for (const s of scorches) {
-    const sg = ctx.createRadialGradient(s.x, s.y, s.r * .2, s.x, s.y, s.r);
-    sg.addColorStop(0, 'rgba(0,0,0,.55)'); sg.addColorStop(1, 'rgba(0,0,0,0)');
+  for (let k = 0; k < LV; k++) {
+    const f = (k + 1) / LV;
+    ctx.fillStyle = `rgba(255,238,196,${(f * .22).toFixed(3)})`; ctx.fill(litP[k]);
+    ctx.fillStyle = `rgba(0,0,0,${(f * .28).toFixed(3)})`; ctx.fill(shadeP[k]);
+    ctx.fillStyle = `rgba(0,0,0,${(f * .2).toFixed(3)})`; ctx.fill(holeP[k]);
+  }
+  for (const s of scorches) {   // charred earth: a black core, burnt-brown edges
+    const sg = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r);
+    sg.addColorStop(0, 'rgba(8,6,4,.62)'); sg.addColorStop(.45, 'rgba(26,16,8,.42)'); sg.addColorStop(.8, 'rgba(50,30,14,.14)'); sg.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = sg; ctx.fillRect(s.x - s.r, s.y - s.r, s.r * 2, s.r * 2);
   }
   drawCaves(); drawTunnels();
   ctx.restore();
-  const top = () => { ctx.beginPath(); for (let x = 0; x < WW; x++) x ? ctx.lineTo(x + .5, ground[x]) : ctx.moveTo(.5, ground[x]); };
-  // grass only where nothing has blown it away (veg), bare dirt rim elsewhere
+  // the surface: a crumbly dark edge on bare earth, turf where the grass survives
   const vegTop = dy => { ctx.beginPath(); let on = false; for (let x = 0; x < WW; x++) { if (veg[x]) { on ? ctx.lineTo(x + .5, ground[x] + dy) : ctx.moveTo(x + .5, ground[x] + dy); on = true; } else on = false; } };
-  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  ctx.save(); ctx.translate(0, 6); top(); ctx.strokeStyle = 'rgba(0,0,0,.22)'; ctx.lineWidth = 9; ctx.stroke(); ctx.restore();
-  top(); ctx.strokeStyle = shade(theme.dirt[0], .12); ctx.lineWidth = 3; ctx.stroke();
-  vegTop(0); ctx.strokeStyle = theme.top; ctx.lineWidth = 6; ctx.stroke();
-  vegTop(-1.5); ctx.strokeStyle = theme.grass; ctx.lineWidth = 2.6; ctx.stroke();
+  top(); ctx.strokeStyle = 'rgba(20,12,5,.5)'; ctx.lineWidth = 2.4; ctx.stroke();
+  ctx.save(); ctx.translate(0, -.8); top(); ctx.strokeStyle = shade(theme.dirt[0], .18); ctx.globalAlpha = .55; ctx.lineWidth = 1.2; ctx.stroke(); ctx.restore();
+  vegTop(1); ctx.strokeStyle = shade(theme.top, -.35); ctx.lineWidth = 5; ctx.stroke();
+  vegTop(-.5); ctx.strokeStyle = theme.top; ctx.lineWidth = 3.2; ctx.stroke();
+  vegTop(-1.6); ctx.strokeStyle = theme.grass; ctx.globalAlpha = .8; ctx.lineWidth = 1.4; ctx.stroke(); ctx.globalAlpha = 1;
 }
 function drawTufts() {
-  // tufts of grass / dry weeds that sway with the wind
+  // blades of grass and dry weeds, in three shades, swaying gently
   const sway = (mode === 'play' ? wind : 3) * .35;
-  for (const [colr, off] of [[theme.top, 0], [theme.grass, 3]]) {
-    ctx.strokeStyle = colr; ctx.lineWidth = 1.4; ctx.beginPath();
-    for (let x = off + 2; x < WW; x += 6) {
+  const shades = [shade(theme.top, -.25), theme.top, theme.grass];
+  shades.forEach((colr, si) => {
+    ctx.strokeStyle = colr; ctx.lineWidth = si === 2 ? .9 : 1.1; ctx.beginPath();
+    for (let x = 2 + si; x < WW; x += 4) {
       if (!veg[x]) continue;
-      const h = hash01(x), gy = ground[x] - 1;
-      if (h < .35) continue;
-      const len = 3 + h * 8, lean = sway + Math.sin(T * .05 + x * .07) * 1.3;
-      ctx.moveTo(x, gy); ctx.quadraticCurveTo(x + lean * .4, gy - len * .6, x + lean, gy - len);
-      if (h > .7) { ctx.moveTo(x + 2, gy); ctx.quadraticCurveTo(x + 2 + lean * .5, gy - len * .4, x + 3 + lean * .8, gy - len * .75); }
+      const h = hash01(x * 1.7 + si), gy = ground[x] - .5;
+      if (h < .3) continue;
+      const len = 3 + h * (si === 2 ? 11 : 8), lean = sway + Math.sin(T * .05 + x * .07) * 1.3 + (h - .6) * 3;
+      ctx.moveTo(x, gy); ctx.quadraticCurveTo(x + lean * .3, gy - len * .6, x + lean, gy - len);
+      if (h > .72) { ctx.moveTo(x + 1.5, gy); ctx.quadraticCurveTo(x + 1.5 - lean * .2, gy - len * .4, x + 1 - lean * .5, gy - len * .7); }
     }
     ctx.stroke();
-  }
+  });
 }
 
 function drawBackdrop() {
@@ -2033,6 +2088,20 @@ function poly(pts) { ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(
 function star(cx, cy, r) { ctx.beginPath(); for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, q = i % 2 ? r * .42 : r; ctx.lineTo(cx + Math.cos(a) * q, cy + Math.sin(a) * q); } ctx.closePath(); }
 const CAMO = [[-11, -14, 8, 3.2, .25], [4, -16, 9, 3, -.3], [13, -13.5, 5.5, 3.4, .5], [-3, -12.5, 6.5, 2.6, 0]];   // hull camo blotches: x, y, rx, ry, rot
 
+// painted-steel look for a hull or turret (called inside its clip): a sheen on top, shadow underneath, road grime low down
+// and a few chips in the paint. Purely visual: the shapes (and so the hitboxes) don't change.
+function metalShade(y0, y1, t) {
+  const h = y1 - y0, sg = ctx.createLinearGradient(0, y0, 0, y1);
+  sg.addColorStop(0, 'rgba(255,250,235,.26)'); sg.addColorStop(.3, 'rgba(255,250,235,.04)'); sg.addColorStop(.65, 'rgba(0,0,0,0)'); sg.addColorStop(1, 'rgba(0,0,0,.34)');
+  ctx.fillStyle = sg; ctx.fillRect(-30, y0 - 1, 60, h + 2);
+  const gg = ctx.createLinearGradient(0, y1 - h * .45, 0, y1); gg.addColorStop(0, 'rgba(92,72,44,0)'); gg.addColorStop(1, 'rgba(92,72,44,.42)');
+  ctx.fillStyle = gg; ctx.fillRect(-30, y1 - h * .45, 60, h * .45 + 1);
+  if (t.hp > 0) {
+    const m = (t.model || 0) + y0 * .1;
+    ctx.fillStyle = 'rgba(205,200,182,.32)';
+    for (let k = 0; k < 6; k++) ctx.fillRect(-17 + hash01(k * 3.1 + m) * 34, y0 + 1 + hash01(k * 7.7 + m) * (h - 2), 1.3, .8);
+  }
+}
 function drawTank(t, active, preview) {
   const M = TANKS[t.model || 0], dead = t.hp <= 0, col = dead ? '#34332e' : t.color;
   const dark = shade(col, -.38), light = shade(col, .22);
@@ -2042,10 +2111,12 @@ function drawTank(t, active, preview) {
   ctx.rotate(t.tilt);
   // tracks + road wheels
   poly([[-22, -3], [-19, -10.5], [19, -10.5], [22, -3], [18, 0.5], [-18, 0.5]]); ctx.fillStyle = '#171813'; ctx.fill();
+  ctx.fillStyle = 'rgba(120,118,100,.35)'; for (let lx = -17; lx <= 17; lx += 2.4) { ctx.fillRect(lx, -.6, 1, 1.1); ctx.fillRect(lx + 1, -10.3, 1, 1); }   // track links
   ctx.strokeStyle = '#3d3f33'; ctx.lineWidth = 1; ctx.stroke();
   for (let k = 0; k < M.wheels; k++) {
     const x = -14 + 28 * k / (M.wheels - 1);
-    ctx.fillStyle = '#34362c'; ctx.beginPath(); ctx.arc(x, -4.8, M.wheelR, 0, TAU); ctx.fill();
+    const wg = ctx.createRadialGradient(x - M.wheelR * .35, -4.8 - M.wheelR * .35, 0, x, -4.8, M.wheelR); wg.addColorStop(0, '#4c4f40'); wg.addColorStop(1, '#1f2019');
+    ctx.fillStyle = wg; ctx.beginPath(); ctx.arc(x, -4.8, M.wheelR, 0, TAU); ctx.fill();
     ctx.strokeStyle = '#0c0d0a'; ctx.lineWidth = 1; ctx.stroke();
     ctx.fillStyle = '#6a6e5a'; ctx.beginPath(); ctx.arc(x, -4.8, 1.3, 0, TAU); ctx.fill();
   }
@@ -2062,6 +2133,7 @@ function drawTank(t, active, preview) {
   ctx.save(); poly(M.hull); ctx.clip();
   ctx.fillStyle = dead ? '#23221e' : dark; for (const [cx, cy, rx, ry, rot] of CAMO) { ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, rot, 0, TAU); ctx.fill(); }
   ctx.fillStyle = dead ? '#2a2924' : 'rgba(70,58,34,.55)'; for (const [cx, cy, rx, ry, rot] of CAMO) { ctx.beginPath(); ctx.ellipse(cx + 7, cy + 2.5, rx * .55, ry * .7, -rot, 0, TAU); ctx.fill(); }
+  metalShade(hullTop, -12.5, t);
   ctx.restore();
   poly(M.hull); ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1; ctx.stroke();
   if (M.era) { ctx.fillStyle = shade(col, -.15); ctx.strokeStyle = 'rgba(0,0,0,.45)'; for (let x = -14; x <= 10; x += 6) { ctx.fillRect(x, hullTop + 1.5, 4.6, 3.4); ctx.strokeRect(x, hullTop + 1.5, 4.6, 3.4); } }   // reactive armor bricks
@@ -2082,7 +2154,9 @@ function drawTank(t, active, preview) {
   ctx.rotate(dead ? Math.PI * .2 : -t.angle * Math.PI / 180);
   const r = t.recoil, gn = M.gun, L = gn.len;
   for (const off of gn.twin ? [-2.6, 2.6] : [0]) {
-    ctx.fillStyle = '#2b2d25'; ctx.fillRect(-r, off - gn.w / 2, L, gn.w);
+    const bg = ctx.createLinearGradient(0, off - gn.w / 2, 0, off + gn.w / 2);   // round steel tube: lit on top, dark underneath
+    bg.addColorStop(0, '#5a5d4e'); bg.addColorStop(.4, '#2e3027'); bg.addColorStop(1, '#121310');
+    ctx.fillStyle = bg; ctx.fillRect(-r, off - gn.w / 2, L, gn.w);
     if (gn.sleeve) {
       const sg = ctx.createLinearGradient(0, off - gn.w * .82, 0, off + gn.w * .82); sg.addColorStop(0, shade(col, .1)); sg.addColorStop(.5, dark); sg.addColorStop(1, shade(col, -.55));
       ctx.fillStyle = sg; ctx.fillRect(5 - r, off - gn.w * .82, L * .52, gn.w * 1.64);
@@ -2102,7 +2176,7 @@ function drawTank(t, active, preview) {
     topY = Math.min(...M.turret.map(p => p[1]));
     const tg = ctx.createLinearGradient(0, topY, 0, hullTop); tg.addColorStop(0, light); tg.addColorStop(1, dark);
     poly(M.turret); ctx.fillStyle = tg; ctx.fill();
-    ctx.save(); poly(M.turret); ctx.clip(); ctx.fillStyle = dead ? '#23221e' : dark; ctx.beginPath(); ctx.ellipse(-6, topY + 4, 6, 3, .3, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.ellipse(7, topY + 6.5, 5, 2.4, -.2, 0, TAU); ctx.fill(); ctx.restore();
+    ctx.save(); poly(M.turret); ctx.clip(); ctx.fillStyle = dead ? '#23221e' : dark; ctx.beginPath(); ctx.ellipse(-6, topY + 4, 6, 3, .3, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.ellipse(7, topY + 6.5, 5, 2.4, -.2, 0, TAU); ctx.fill(); metalShade(topY, hullTop, t); ctx.restore();
     poly(M.turret); ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1; ctx.stroke();
   }
   ctx.fillStyle = '#1d1e19'; ctx.beginPath(); ctx.ellipse(-3.5, topY - .4, 3.4, 1.4, 0, 0, TAU); ctx.fill();   // commander hatch
@@ -2170,21 +2244,33 @@ function drawShots() {
   }
 }
 
+// soft sprites for smoke and fire, made once: an irregular billowy puff, and white-hot / cooling fire glows
+function makeSprite(size, paint) { const c = document.createElement('canvas'); c.width = c.height = size; paint(c.getContext('2d'), size); return c; }
+const SMOKE_SPRITE = makeSprite(96, (g, n) => {
+  for (let k = 0; k < 9; k++) {   // several overlapping lumps make it billow instead of looking like a disc
+    const a = k / 9 * TAU, d = k ? n * .14 : 0, x = n / 2 + Math.cos(a) * d, y = n / 2 + Math.sin(a) * d, r = n * (k ? .26 : .34);
+    const rg = g.createRadialGradient(x, y - r * .2, 0, x, y, r);
+    rg.addColorStop(0, 'rgba(78,76,74,.55)'); rg.addColorStop(.6, 'rgba(62,60,58,.28)'); rg.addColorStop(1, 'rgba(50,48,46,0)');
+    g.fillStyle = rg; g.fillRect(0, 0, n, n);
+  }
+});
+const glowSprite = stops => makeSprite(64, (g, n) => { const rg = g.createRadialGradient(n / 2, n / 2, 0, n / 2, n / 2, n / 2); stops.forEach(([o, c]) => rg.addColorStop(o, c)); g.fillStyle = rg; g.fillRect(0, 0, n, n); });
+const FIRE_HOT = glowSprite([[0, 'rgba(255,252,230,1)'], [.25, 'rgba(255,214,120,.95)'], [.6, 'rgba(255,140,40,.45)'], [1, 'rgba(255,90,10,0)']]);
+const FIRE_COOL = glowSprite([[0, 'rgba(255,120,40,.9)'], [.45, 'rgba(200,60,20,.5)'], [1, 'rgba(120,30,10,0)']]);
 function drawParts() {
   // drawn in passes by type so the blend mode changes a few times per frame, not once per particle
-  ctx.fillStyle = '#5b5d68';
-  for (const p of parts) if (p.type === 'smoke') {
-    const t = p.life / p.max; ctx.globalAlpha = t * .4;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (1 + (1 - t) * 1.8), 0, TAU); ctx.fill();
+  for (const p of parts) if (p.type === 'smoke') {   // soft billowing puffs that swell and thin out as they rise
+    const t = p.life / p.max, r = p.size * (1 + (1 - t) * 1.8) * 1.5; ctx.globalAlpha = t * .55;
+    ctx.drawImage(SMOKE_SPRITE, p.x - r, p.y - r, r * 2, r * 2);
   }
   for (const p of parts) if (p.type === 'dirt') {
     ctx.globalAlpha = Math.min(1, p.life / p.max * 3); ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, p.size, p.size);
   }
   ctx.globalCompositeOperation = 'lighter';
-  for (const p of parts) if (p.type === 'fire') {
-    const t = p.life / p.max; ctx.globalAlpha = Math.min(1, t * 1.4);
-    ctx.fillStyle = `hsl(${(12 + t * 42) | 0},100%,${(40 + t * 22) | 0}%)`;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (.35 + t), 0, TAU); ctx.fill();
+  for (const p of parts) if (p.type === 'fire') {   // glowing fireball blobs: white-hot to deep orange as they cool
+    const t = p.life / p.max, r = p.size * (.5 + t) * 1.6;
+    ctx.globalAlpha = Math.min(1, (1 - t) * 1.6) * .8; ctx.drawImage(FIRE_COOL, p.x - r, p.y - r, r * 2, r * 2);
+    ctx.globalAlpha = Math.min(1, t * 1.5); ctx.drawImage(FIRE_HOT, p.x - r * .8, p.y - r * .8, r * 1.6, r * 1.6);
   }
   for (const p of parts) if (p.type === 'spark') {
     ctx.globalAlpha = p.life / p.max; ctx.strokeStyle = p.color || '#ffd27a'; ctx.lineWidth = p.size;
@@ -2194,7 +2280,7 @@ function drawParts() {
   ctx.globalAlpha = 1;
   for (const r of rings) {
     const t = r.life / r.max;
-    ctx.globalAlpha = t; ctx.strokeStyle = r.color; ctx.lineWidth = r.w * t + .5;
+    ctx.globalAlpha = t * .4; ctx.strokeStyle = r.color; ctx.lineWidth = r.w * t + .5;   // a faint shockwave, not a cartoon ring
     ctx.beginPath(); ctx.arc(r.x, r.y, lerp(r.r1, r.r0, t), 0, TAU); ctx.stroke();
   }
   for (const f of flashes) {
