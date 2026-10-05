@@ -736,7 +736,7 @@ function newTank(i, x) {
   if (x == null) { const slot = WW / numPlayers; x = slot * i + rnd(slot * 0.3, slot * 0.7); }
   const lo = loadout && loadout[i], model = lo ? lo.model : 0, M = TANKS[model];
   return {i, x, y: ground[Math.floor(x)] - 4, model, team: lo && lo.team != null ? lo.team : i % 2, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 90, power: 100, weapon: 0,
-          ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color: lo ? lo.color : COLORS[i], vy: 0, stock: [], armed: -1, lvl: lo && lo.lvl != null ? lo.lvl : null, ai: net ? !net.occ[i] : i >= numHumans,
+          ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color: lo ? lo.color : COLORS[i], vy: 0, stock: [], armed: -1, lvl: lo && lo.lvl != null ? lo.lvl : null, name: lo ? cleanName(lo.name) : '', ai: net ? !net.occ[i] : i >= numHumans,
           tilt: tiltAt(x), recoil: 0, dead: false};
 }
 function startRound() {
@@ -749,10 +749,10 @@ function startRound() {
   makeCaves();
   tanks = Array.from({length: numPlayers}, (_, i) => newTank(i, xs[order.indexOf(i)]));
   shots = []; parts = []; rings = []; flashes = []; popups = []; pending = []; wheel = null; winner = -1; winTeam = -1; evq = [];
-  strikes = []; beams = []; uiParts = []; resetStats();
+  strikes = []; beams = []; uiParts = []; resetStats(); nameEdit = -1;
   hit = [false, false, false, false]; shake = 0; whiteFlash = 0; paused = false; terrainDirty = false; sandActive = false;
   mode = 'play';
-  if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, v => Math.round(v * 10)), np: numPlayers, ai: tanks.map(t => t.ai), lo: tanks.map(t => [t.model, t.color, t.team]), tm: teamMode,
+  if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, v => Math.round(v * 10)), np: numPlayers, ai: tanks.map(t => t.ai), lo: tanks.map(t => [t.model, t.color, t.team, t.name]), tm: teamMode,
                                          cv: caves.map(c => [c.x, c.w, c.top, c.h].map(Math.round))});
   if (campaign) {   // mission set-up: air support for the player, who also gets the first shot
     const m = mission(); lastPick = {model: loadout[0].model, color: loadout[0].color}; campResult = null;
@@ -783,6 +783,7 @@ function beginTurn(t) {
     }
     if (tk.status.id === 'frozen') tk.fuel = 0;   // tracks frozen solid
   }
+  if (!tk.freeSpin && tk.hp > 0) { tk.freeSpin = true; startWheel(true); return; }   // everyone's first turn opens with a free supply drop
   emit({t: 'turn', i: t});
 }
 // after the shot (and any combo / supply wheel) the shooter may drive with leftover fuel before the turn passes:
@@ -797,6 +798,12 @@ function endShot() {
     aiMove = t.ai ? {dir: Math.random() < .5 ? -1 : 1, frames: cpuFrames} : null;
     emit({t: 'moveph', i: turn});
   } else beginTurn(nextAlive(turn));
+}
+function resumeTurn() {   // after the opening free spin: the same tank now aims and fires as normal
+  const tk = tanks[turn];
+  state = 'aim'; aiPlan = null; aiTimer = 60;
+  turnFrames = net && !tk.ai ? TURN_SECONDS * 60 : 0;
+  emit({t: 'turn', i: turn});
 }
 function endMove() {   // back through 'settle' so a tank that drove off a ledge lands (and the win check runs) first
   if (state !== 'move') return;
@@ -989,7 +996,7 @@ function applyEvent(e) {
   switch (e.t) {
     case 'turn': {
       const t = tanks[e.i]; if (!t) return;
-      banner = {t: 0, text: `${teamMode ? TEAMS[t.team].name + ' · ' : ''}UNIT ${e.i + 1} — FIRE MISSION`, color: teamMode ? TEAMS[t.team].color : t.color,
+      banner = {t: 0, text: `${teamMode ? TEAMS[t.team].name + ' · ' : ''}${unitName(e.i)} — FIRE MISSION`, color: teamMode ? TEAMS[t.team].color : t.color,
                 sub: t.status ? `${t.status.icon} ${t.status.name}: ${t.status.effect}`
                    : t.ai ? 'CPU' : (net ? (isMine(t) ? 'YOUR ORDERS' : 'ALLIED COMMAND') : 'YOUR ORDERS'),
                 subColor: t.status ? t.status.color : null};
@@ -999,7 +1006,7 @@ function applyEvent(e) {
     case 'moveph': {   // the shooter's reposition phase
       const t = tanks[e.i]; if (!t) return;
       const mine = isMine(t) && !t.ai;
-      banner = {t: 0, text: mine ? 'REPOSITION' : `UNIT ${e.i + 1} — REPOSITIONING`, color: t.color,
+      banner = {t: 0, text: mine ? 'REPOSITION' : `${unitName(e.i)} — REPOSITIONING`, color: t.color,
                 sub: mine ? 'A / D TO DRIVE  ·  ENTER TO END TURN' : 'moving with leftover fuel'};
       break;
     }
@@ -1578,7 +1585,7 @@ function updateGame() {
       const by = t.lastHitBy;   // kill credit goes to whoever last hit it (a self-kill or a friendly kill doesn't count)
       if (by != null && by !== t.i && stats[by] && isEnemy(t, by)) stats[by].kills++;
       emit({t: 'bang', x: t.x, y: t.y - 8, r: 42});
-      emit({t: 'pop', x: t.x, y: t.y - 60, s: by != null && by !== t.i ? `DESTROYED BY UNIT 0${by + 1}` : 'DESTROYED', c: '#fff', z: 20});
+      emit({t: 'pop', x: t.x, y: t.y - 60, s: by != null && by !== t.i ? `DESTROYED BY ${unitName(by)}` : 'DESTROYED', c: '#fff', z: 20});
     }
   }
 
@@ -1661,7 +1668,7 @@ function updateGame() {
       { const tw = tanks[turn]; if (tw.stock.length < STOCK_MAX) tw.stock.push(SPECIALS[wheel.idx]); }   // into the stockpile
       emit({t: 'conf', x: W / 2, y: H / 2, n: 90, sp: 7}); emit({t: 'sfx', n: 'prize'});
     }
-    if (wheel.t > wheel.spin + 130) { wheel = null; endShot(); }
+    if (wheel.t > wheel.spin + 130) { const free = wheel.free; wheel = null; if (free) resumeTurn(); else endShot(); }
   }
 
   if (state === 'settle' && --aiTimer <= 0) {
@@ -1710,8 +1717,8 @@ function startQuick() {
   state = 'quick';
   emit({t: 'sfx', n: 'hit'});
 }
-function startWheel() {
-  wheel = {t: 0, spin: 210, idx: Math.floor(Math.random() * SPECIALS.length), flick: 0};
+function startWheel(free) {   // free: the opening supply drop at the start of a tank's first turn (it then aims as normal)
+  wheel = {t: 0, spin: 210, idx: Math.floor(Math.random() * SPECIALS.length), flick: 0, free: !!free};
   state = 'wheel';
 }
 function qteKey(k) {
@@ -1781,7 +1788,7 @@ function onHostConn(conn) {
     }
     net.occ[seat] = true; net.conns.push({conn, seat, seen: performance.now()});
     conn.send({t: 'welcome', seat, np: numPlayers});
-    bcast({t: 'lobby', np: numPlayers, occ: net.occ});
+    bcast({t: 'lobby', np: numPlayers, occ: net.occ, tm: teamMode});
   });
   conn.on('data', d => hostData(conn, d));
   conn.on('close', () => hostDrop(conn));
@@ -1798,7 +1805,7 @@ function hostDrop(conn) {
       if (state === 'aim' && turn === seat) { aiPlan = null; aiTimer = 60; turnFrames = 0; }
     }
   } else if (mode === 'armory') { loadout[seat] = null; loadout[seat] = cpuPick(seat); balanceTeams(); bcastArmory(); }   // a dropped player's seat goes to a CPU
-  else bcast({t: 'lobby', np: numPlayers, occ: net.occ});
+  else bcast({t: 'lobby', np: numPlayers, occ: net.occ, tm: teamMode});
 }
 function hostData(conn, d) {
   const c = net && net.conns.find(c => c.conn === conn);
@@ -1829,7 +1836,7 @@ function netBroadcast() {
     k: tanks.map(t => [r1(t.x), r1(t.y), Math.round(t.hp), r1(t.angle), r1(t.power), t.weapon, r1(t.fuel),
                        t.stock.map(s => ALLW.indexOf(s)), t.ammo.map(a => a === Infinity ? -1 : a), t.status ? STATUSES.indexOf(t.status) : -1, t.armed]),
     sh: shots.map(s => [s.id, r1(s.x), r1(s.y), Math.round(s.vx * 1000) / 1000, Math.round(s.vy * 1000) / 1000, ALLW.indexOf(s.w), s.drilling ? 1 : 0]),
-    wh: wheel ? [wheel.t, wheel.idx, wheel.spin] : null, tl: turnLeft, ss: state === 'over' ? stats.map(s => [s.shots, s.hits, s.dmg, s.kills]) : undefined,
+    wh: wheel ? [wheel.t, wheel.idx, wheel.spin, wheel.free ? 1 : 0] : null, tl: turnLeft, ss: state === 'over' ? stats.map(s => [s.shots, s.hits, s.dmg, s.kills]) : undefined,
     q: qte ? [qte.seq.join(''), qte.idx, qte.t, qte.limit, qte.done ? 1 : 0, qte.ok ? 1 : 0, qte.resT, qte.msg] : null};
   if (evq.length) { m.ev = evq; evq = []; }
   if (terrainDirty && (!sandActive || T % 6 === 0)) { m.g = Array.from(ground, v => Math.round(v * 10)); terrainDirty = false; }   // while sand slides: 10 Hz; the final resting shape goes out immediately
@@ -1874,9 +1881,9 @@ function clientData(m) {
   switch (m.t) {
     case 'welcome': net.seat = m.seat; net.status = 'ready'; numPlayers = m.np; net.occ = []; menuStage = 'lobby'; netMsg = ''; break;
     case 'full': fail2(m.why); break;
-    case 'lobby': net.occ = m.occ; numPlayers = m.np; break;
+    case 'lobby': net.occ = m.occ; numPlayers = m.np; teamMode = !!m.tm; break;
     case 'round': startClientRound(m); break;
-    case 'arm': loadout = m.p; armoryGo = m.go || 0; teamMode = !!m.tm; if (Number.isInteger(m.mp) && MAPS[m.mp]) mapIdx = m.mp; if (CPU_LEVELS[m.cl]) cpuLevel = m.cl; if (mode !== 'armory') { mode = 'armory'; menuButtons = []; } break;
+    case 'arm': loadout = m.p; armoryGo = m.go || 0; teamMode = !!m.tm; if (Number.isInteger(m.mp) && MAPS[m.mp]) mapIdx = m.mp; if (CPU_LEVELS[m.cl]) cpuLevel = m.cl; if (mode !== 'armory') { mode = 'armory'; menuButtons = []; nameEdit = -1; const nm = savedName(), mine = loadout[net.seat]; if (nm && mine && !mine.name) requestPick(net.seat, {name: nm}); } break;
     case 's': applySnap(m); break;
   }
 }
@@ -1886,9 +1893,9 @@ function startClientRound(m) {
   numPlayers = m.np; makeScene(m.th, m.g); teamMode = !!m.tm; resetStats();
   caves = (m.cv || []).map(([x, w, top, h]) => newCave(x, w, top, h)); saucers = [];
   tanks = m.ai.map((ai, i) => {
-    const [model, color, team] = (m.lo && m.lo[i]) || [0, COLORS[i], i % 2], M = TANKS[model];
+    const [model, color, team, name] = (m.lo && m.lo[i]) || [0, COLORS[i], i % 2, ''], M = TANKS[model];
     return {i, x: 0, y: 0, tx: 0, ty: 0, ta: 90, tp: 100, init: false, model, team, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 90, power: 100,
-            weapon: 0, ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color, vy: 0, stock: [], armed: -1, ai, tilt: 0, recoil: 0, dead: false};
+            weapon: 0, ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color, vy: 0, stock: [], armed: -1, name: cleanName(name), ai, tilt: 0, recoil: 0, dead: false};
   });
   shots = []; parts = []; rings = []; flashes = []; popups = []; wheel = null; winner = -1; winTeam = -1; banner = null; strikes = []; beams = []; uiParts = [];
   shake = 0; whiteFlash = 0; state = 'aim'; turn = 0; mode = 'play'; net.sent = false;
@@ -1926,7 +1933,7 @@ function applySnap(m) {
   if (state === 'quick' && m.q) qte = {seq: m.q[0].split(''), idx: m.q[1], t: m.q[2], limit: m.q[3], done: !!m.q[4], ok: !!m.q[5], resT: m.q[6], msg: m.q[7]};
   else if (state !== 'quick') qte = null;
   if (state === 'wheel' && m.wh) {
-    if (!wheel) wheel = {t: m.wh[0], idx: m.wh[1], spin: m.wh[2], flick: 0};
+    if (!wheel) wheel = {t: m.wh[0], idx: m.wh[1], spin: m.wh[2], flick: 0, free: !!m.wh[3]};
     else if (Math.abs(wheel.t - m.wh[0]) > 4) wheel.t = m.wh[0];
   } else if (state !== 'wheel') wheel = null;
 }
@@ -2191,7 +2198,7 @@ function drawTank(t, active, preview) {
   ctx.restore();
   if (dead || preview) return;
   // unit tag + armor bar above the tank
-  text('0' + (t.i + 1), t.x, t.y - 55, 14, INK, 'center', '800', 'rgba(0,0,0,.75)');
+  text(t.name || '0' + (t.i + 1), t.x, t.y - 55, t.name ? 12 : 14, INK, 'center', '800', 'rgba(0,0,0,.75)');   // its name, or its unit number
   if (teamMode) { ctx.fillStyle = TEAMS[t.team].color; ctx.beginPath(); ctx.moveTo(t.x - 24, t.y - 60); ctx.lineTo(t.x - 14, t.y - 60); ctx.lineTo(t.x - 19, t.y - 52); ctx.closePath(); ctx.fill(); }   // team chevron
   if (t.status) text(t.status.icon, t.x + 21, t.y - 55, 14, '#fff', 'center');
   rr(t.x - 19, t.y - 49, 38, 6, 2); ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fill();
@@ -2399,7 +2406,7 @@ function drawCards() {
     const pg = ctx.createLinearGradient(0, y + 14, 0, y + 48); pg.addColorStop(0, shade(t.color, .15)); pg.addColorStop(1, shade(t.color, -.35));
     rr(x + 10, y + 14, 34, 34, 8); ctx.fillStyle = pg; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.55)'; ctx.lineWidth = 2; ctx.stroke();
     text(t.hp <= 0 ? '✕' : '0' + (i + 1), x + 27, y + 32, t.hp <= 0 ? 22 : 20, inkOn(t.color), 'center', '900');
-    text('UNIT 0' + (i + 1) + ' · ' + TANKS[t.model || 0].name, x + 52, y + 17, 12, INK, 'left', '800');
+    text(unitName(i) + ' · ' + TANKS[t.model || 0].name, x + 52, y + 17, 12, INK, 'left', '800');
     const you = net && i === net.seat;
     text(teamMode ? TEAMS[t.team].name + (t.ai ? ' · CPU' : you ? ' · YOU' : '') : (t.ai ? 'CPU' : you ? 'YOU' : 'OPERATOR'), x + cw - 12, y + 17, 11, teamMode ? TEAMS[t.team].color : you ? t.color : INK_DIM, 'right', you ? '900' : '800');
     // armor: segmented bar
@@ -2619,7 +2626,7 @@ function drawQuick() {
   ctx.save(); ctx.translate(shakeX, 0);
   const col = q.done ? (q.ok ? '#4ade80' : '#ef4444') : t.color;
   glow(col, 26); panel(cx - 260, y0, 520, 206, 24, col, 3); noGlow();
-  text(mine ? 'TARGET HIT — ENTER THE AUTH CODE' : `UNIT 0${turn + 1} — TARGET HIT!`, cx, y0 + 30, 21, '#fff', 'center', '900');
+  text(mine ? 'TARGET HIT — ENTER THE AUTH CODE' : `${unitName(turn)} — TARGET HIT!`, cx, y0 + 30, 21, '#fff', 'center', '900');
   text(mine ? 'key it in order to call in a supply drop' : t.ai ? 'the CPU is requesting a supply drop…' : 'requesting a supply drop…', cx, y0 + 55, 12, INK_DIM, 'center', '700');
   const sz = 72, gap = 14, x0 = cx - (4 * sz + 3 * gap) / 2, ty = y0 + 72;
   ctx.globalAlpha = q.done ? .22 : 1;   // fade the tiles so the result text reads clearly
@@ -2650,7 +2657,7 @@ function drawWheel() {
   ctx.save(); ctx.translate(cx, cy); ctx.rotate(T * .004);
   for (let i = 0; i < 18; i++) { ctx.rotate(TAU / 18); ctx.fillStyle = 'rgba(255,255,255,.035)'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, 720, 0, TAU / 36); ctx.closePath(); ctx.fill(); }
   ctx.restore();
-  text(`SUPPLY DROP — UNIT 0${turn + 1}`, cx, 52, 34, t.color, 'center', '900', 'rgba(0,0,0,.6)');
+  text(`${wheel.free ? 'OPENING SUPPLY DROP' : 'SUPPLY DROP'} — ${unitName(turn)}`, cx, 52, 34, t.color, 'center', '900', 'rgba(0,0,0,.6)');
   text(done ? 'SUPPLY DROP AUTHORIZED' : 'REQUISITIONING SUPPLIES…', cx, 88, 15, 'rgba(255,255,255,.7)', 'center', '800');
   // outer ring
   ctx.save(); glow(done ? SPECIALS[wheel.idx].color : '#facc15', 26);
@@ -2703,7 +2710,7 @@ function drawOver() {
   else if (cr) text('✖', W / 2, py + 40, 40, '#ef4444', 'center', '900');
   else text(winner >= 0 ? '🏆' : '🤝', W / 2, py + 40, 40, '#fff', 'center');
   if (cr) text(cr.won ? 'MISSION ACCOMPLISHED' : 'MISSION FAILED', W / 2, py + 92, 34, col, 'center', '900');
-  else text(teamWin ? `TEAM ${TEAMS[winTeam].name} HOLDS THE FIELD` : winner >= 0 ? `UNIT 0${winner + 1} HOLDS THE FIELD` : 'STALEMATE', W / 2, py + 92, 34, col, 'center', '900');
+  else text(teamWin ? `TEAM ${TEAMS[winTeam].name} HOLDS THE FIELD` : winner >= 0 ? `${unitName(winner)} HOLDS THE FIELD` : 'STALEMATE', W / 2, py + 92, 34, col, 'center', '900');
   // after-action report
   const cols = [['UNIT', W / 2 - 270, 'left'], ['WINS', W / 2 - 80, 'center'], ['DAMAGE', W / 2 + 20, 'center'], ['ACCURACY', W / 2 + 130, 'center'], ['KILLS', W / 2 + 240, 'center']];
   const hy = py + 140;
@@ -2716,7 +2723,7 @@ function drawOver() {
     if (teamMode) { ctx.fillStyle = TEAMS[t.team].color; ctx.fillRect(W / 2 - 282, y - 10, 3, 20); }
     ctx.fillStyle = t.color; ctx.beginPath(); ctx.arc(W / 2 - 258, y, 10, 0, TAU); ctx.fill();
     text(`0${i + 1}`, W / 2 - 258, y + 1, 10, inkOn(t.color), 'center', '900');
-    text(TANKS[t.model || 0].name + (t.ai ? ' · CPU' : ''), W / 2 - 240, y + 1, 13, t.hp > 0 ? INK : INK_DIM, 'left', '800');
+    text((t.name || TANKS[t.model || 0].name) + (t.ai ? ' · CPU' : ''), W / 2 - 240, y + 1, 13, t.hp > 0 ? INK : INK_DIM, 'left', '800');
     text('★ ' + wins[i], cols[1][1], y + 1, 14, '#fcd34d', 'center', '800');
     text(String(s.dmg), cols[2][1], y + 1, 14, s.dmg && s.dmg === best ? '#9cc255' : INK, 'center', '800');
     text(s.shots ? `${Math.round(s.hits / s.shots * 100)}%  (${s.hits}/${s.shots})` : '—', cols[3][1], y + 1, 13, INK, 'center', '700');
@@ -2935,11 +2942,23 @@ const seatIsCPU = i => net ? !net.occ[i] : i >= numHumans;
 const takenColors = except => loadout.filter((p, i) => p && i !== except).map(p => p.color);
 const canEditSeat = i => loadout && loadout[i] && !loadout[i].cpu && (!net || i === net.seat);
 function cpuPick(i) { return {model: Math.floor(Math.random() * TANKS.length), color: pick(PALETTE.filter(c => !takenColors(i).includes(c))), ready: true, cpu: true}; }
+// ---- tank names: click your unit's name in the armory to type one (up to 12 characters). Remembered in this browser.
+const cleanName = s => String(s || '').toUpperCase().replace(/[^A-Z0-9 .!\-]/g, '').replace(/\s+/g, ' ').slice(0, 12).trim();
+const unitName = i => (tanks[i] && tanks[i].name) || 'UNIT 0' + (i + 1);
+let nameEdit = -1, nameBuf = '';
+function savedName() { try { return cleanName(localStorage.getItem('ironrain.name')); } catch (e) { return ''; } }
+function startNameEdit(i) { if (!canEditSeat(i)) return; nameEdit = i; nameBuf = loadout[i].name || ''; sfx.click(); }
+function finishNameEdit() {
+  if (nameEdit < 0) return;
+  const i = nameEdit, n = cleanName(nameBuf); nameEdit = -1;
+  if (loadout && loadout[i]) { requestPick(i, {name: n}); if (!net || i === net.seat) try { localStorage.setItem('ironrain.name', n); } catch (e) {} }
+}
 function enterArmory() {
   loadout = Array(numPlayers).fill(null);
   for (let i = 0; i < numPlayers; i++) if (!seatIsCPU(i)) {   // humans first, each on a different default tank + colour
     const free = PALETTE.filter(c => !takenColors(i).includes(c));
-    loadout[i] = {model: i % TANKS.length, color: free.includes(COLORS[i]) ? COLORS[i] : free[0], ready: false, cpu: false};
+    loadout[i] = {model: i % TANKS.length, color: free.includes(COLORS[i]) ? COLORS[i] : free[0], ready: false, cpu: false,
+                  name: (net ? i === net.seat : i === 0) ? savedName() : ''};   // your remembered name on your own seat
   }
   for (let i = 0; i < numPlayers; i++) if (!loadout[i]) loadout[i] = cpuPick(i);   // CPUs get a random tank + unused colour
   if (numPlayers < 3) teamMode = false;                                            // teams need at least 3 tanks
@@ -2967,6 +2986,7 @@ function armoryChange(i, ch) {   // validated change to one seat's pick (local i
   const p = loadout && loadout[i]; if (!p || p.cpu) return;
   if (Number.isInteger(ch.model)) p.model = ((ch.model % TANKS.length) + TANKS.length) % TANKS.length;
   if (typeof ch.color === 'string' && PALETTE.includes(ch.color) && !takenColors(i).includes(ch.color)) p.color = ch.color;
+  if (typeof ch.name === 'string') p.name = cleanName(ch.name);
   if ((ch.team === 0 || ch.team === 1) && teamMode) { p.team = ch.team; balanceTeams(); }
   if (typeof ch.ready === 'boolean') p.ready = ch.ready;
 }
@@ -3051,11 +3071,19 @@ function drawArmory() {
     ctx.save(); if (focus || (net && i === net.seat)) halo(px, py, pw, ph, 16, p.color);
     panel(px, py, pw, ph, 16, p.ready ? '#9cc255' : (focus || (net && i === net.seat)) ? p.color : 'rgba(214,204,150,.3)', p.ready || focus ? 2.4 : 1.4);
     noGlow(); ctx.restore();
-    if (!net && !p.cpu) menuButtons.push({x: px, y: py, w: pw, h: 40, action: () => { armoryFocus = i; }});   // click a header to focus (hot-seat)
+    const nameRect = {x: px + 46, y: py + 14, w: pw - 120, h: 26}, editing = nameEdit === i;
+    if (!net && !p.cpu) menuButtons.push({x: px, y: py, w: pw, h: 40, action: () => { armoryFocus = i; if (inRect(mouse, nameRect)) startNameEdit(i); }});   // click a header to focus (hot-seat), the name to rename
+    else if (mine) menuButtons.push({...nameRect, action: () => startNameEdit(i)});
     // header
     rr(px + 12, py + 12, 30, 30, 7); ctx.fillStyle = p.color; ctx.fill(); ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 2; ctx.stroke();
     text('0' + (i + 1), px + 27, py + 28, 16, inkOn(p.color), 'center', '900');
-    text('UNIT 0' + (i + 1), px + 50, py + 27, 15, INK, 'left', '900');
+    if (editing) {   // typing a name: a field with a blinking caret
+      rr(nameRect.x, nameRect.y, nameRect.w, nameRect.h, 5); ctx.fillStyle = 'rgba(255,255,255,.12)'; ctx.fill(); ctx.strokeStyle = p.color; ctx.lineWidth = 1.5; ctx.stroke();
+      text(nameBuf + (T % 40 < 20 ? '_' : ' '), px + 52, py + 28, 14, INK, 'left', '900');
+    } else {
+      text(p.name || 'UNIT 0' + (i + 1), px + 50, py + 27, 15, INK, 'left', '900');
+      if (mine) { ctx.font = `900 15px ${FONT}`; text('✎', px + 56 + ctx.measureText(p.name || 'UNIT 0' + (i + 1)).width, py + 27, 12, INK_DIM, 'left', '800'); }
+    }
     const who = p.cpu ? 'CPU' : net ? (i === net.seat ? 'YOU' : 'OPERATOR') : 'OPERATOR';
     text(who, px + pw - 12, py + 27, 11, who === 'YOU' ? p.color : INK_DIM, 'right', '800');
     // tank preview
@@ -3128,7 +3156,7 @@ function copyInvite() {
 
 function drawLobby() {
   const host = net && net.role === 'host';
-  text(host ? 'YOUR ROOM' : 'ROOM LOBBY', W / 2, 188, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
+  text((host ? 'YOUR ROOM' : 'ROOM LOBBY') + (teamMode && numPlayers === 4 ? '  ·  2v2 TEAMS' : ''), W / 2, 188, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
   panel(W / 2 - 190, 206, 380, 78, 16, '#d4a417', 2);
   try { ctx.letterSpacing = '10px'; } catch (e) {}
   text(net.code, W / 2 + 5, 246, 54, '#fff', 'center', '900');
@@ -3264,7 +3292,9 @@ function drawMenu() {
   } else if (menuStage === 'count' || menuStage === 'hostcount') {
     const online = menuStage === 'hostcount';
     text(online ? 'HOW MANY TANKS IN THE ROOM?  (friends take the open seats, CPUs fill the rest)' : 'SELECT FORCE SIZE', W / 2, 198, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
-    [2, 3, 4].forEach((n, i) => { if (button(W / 2 - 300 + i * 205, 218, 190, 96, n + '', n + ' TANKS', n, COLORS[i + 1], () => online ? (sfx.click(), hostRoom(n)) : pickCount(n))) any = true; });
+    const go = (n, teams) => { teamMode = teams; if (online) { sfx.click(); hostRoom(n); } else pickCount(n); };
+    [2, 3, 4].forEach((n, i) => { if (button(W / 2 - 381 + i * 194, 218, 180, 96, n + '', n + ' TANKS · FREE-FOR-ALL', n, COLORS[i + 1], () => go(n, false))) any = true; });
+    if (button(W / 2 - 381 + 3 * 194, 218, 180, 96, '2v2', 'TEAMS · ALPHA vs BRAVO', 'T', TEAMS[0].color, () => go(4, true))) any = true;   // one click to team play
     if (netMsg) text(netMsg, W / 2, 384, 14, '#fca5a5', 'center', '800', 'rgba(0,0,0,.6)');
   } else {
     text(`${numPlayers} TANKS — HOW MANY HUMANS?`, W / 2, 198, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
@@ -3368,6 +3398,13 @@ addEventListener('keydown', e => {
     else if (/^[a-z0-9]$/.test(k) && !e.ctrlKey && !e.metaKey && codeInput.length < 5) codeInput += k.toUpperCase();
     return;
   }
+  if (mode === 'armory' && nameEdit >= 0) {                 // typing a tank name (before any other shortcut, so letters type)
+    e.preventDefault();
+    if (k === 'enter' || k === 'escape' || k === 'tab') finishNameEdit();
+    else if (k === 'backspace') nameBuf = nameBuf.slice(0, -1);
+    else if (e.key.length === 1 && /[a-z0-9 .!\-]/i.test(e.key) && nameBuf.length < 12 && !e.ctrlKey && !e.metaKey) nameBuf += e.key.toUpperCase();
+    return;
+  }
   if (k === 'm') { muted = !muted; return; }
   if (mode === 'armory') {
     if (k === 'escape') { if (net) leaveRoom(); else if (campaign) leaveMission(false); else { mode = 'menu'; menuStage = 'humans'; loadout = null; } return; }
@@ -3406,8 +3443,8 @@ addEventListener('keydown', e => {
       if (k === 'arrowup' || k === 'arrowdown') { campSel = clamp(campSel + (k === 'arrowdown' ? 1 : -1), 0, MISSIONS.length - 1); sfx.click(); }
       else if (k === 'enter' && campSel < campProgress().unlocked) startMission(campSel);
     }
-    else if (menuStage === 'count') { if (n >= 2 && n <= 4) pickCount(n); }
-    else if (menuStage === 'hostcount') { if (n >= 2 && n <= 4) hostRoom(n); }
+    else if (menuStage === 'count') { if (n >= 2 && n <= 4) { teamMode = false; pickCount(n); } else if (k === 't') { teamMode = true; pickCount(4); } }
+    else if (menuStage === 'hostcount') { if (n >= 2 && n <= 4) { teamMode = false; hostRoom(n); } else if (k === 't') { teamMode = true; hostRoom(4); } }
     else if (menuStage === 'humans') { if (n >= 0 && n <= numPlayers) pickHumans(n); }
     else if (menuStage === 'lobby' && k === 'enter') startOnline();
     return;
