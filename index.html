@@ -886,6 +886,16 @@ function updateFx() {
 }
 
 // ====================================================== firing & damage
+// a blast buried in the ground (a drill that ran out of range): the soil it destroys leaves a pocket, and the earth above
+// slumps down into it, so the surface sinks by the pocket's height; where the blast reaches the surface it's an open crater
+function undermine(cx, cy, r) {
+  for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(WW - 1, Math.ceil(cx + r)); x++) {
+    const dy = Math.sqrt(Math.max(0, r * r - (x - cx) * (x - cx)));
+    if (ground[x] < cy - dy) ground[x] = Math.min(WH - 2, ground[x] + 2 * dy);
+    else if (ground[x] <= cy + dy) ground[x] = Math.min(WH, cy + dy);
+  }
+  disturbSand();
+}
 function crater(cx, cy, r) {
   for (let x = Math.max(0, Math.floor(cx - r)); x <= Math.min(WW - 1, Math.ceil(cx + r)); x++) {
     const dx = x - cx, dy = Math.sqrt(r * r - dx * dx);
@@ -1029,7 +1039,9 @@ function explode(x, y, w, owner) {
     emit({t: 'orbital', x: sx});
     return;
   }
-  crater(x, y, w.radius);
+  const buried = w.kind === 'drill' && y > ground[clamp(Math.floor(x), 0, WW - 1)] + 4;
+  if (buried) { undermine(x, y, w.radius); emit({t: 'dirt', x, y: ground[clamp(Math.floor(x), 0, WW - 1)], r: w.radius * .7}); }   // a drill that ran out underground
+  else crater(x, y, w.radius);
   terrainDirty = true;
   caveCheck(x, y, w.radius, w.damage);
   emit({t: 'boom', x, y, r: w.radius});
