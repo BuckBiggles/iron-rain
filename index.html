@@ -694,7 +694,7 @@ function placeSpawn(fx, reach = 70 * K, lift = 0) {
 function newTank(i, x) {
   if (x == null) { const slot = WW / numPlayers; x = slot * i + rnd(slot * 0.3, slot * 0.7); }
   const lo = loadout && loadout[i], model = lo ? lo.model : 0, M = TANKS[model];
-  return {i, x, y: ground[Math.floor(x)] - 4, model, team: lo && lo.team != null ? lo.team : i % 2, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 90, power: 55, weapon: 0,
+  return {i, x, y: ground[Math.floor(x)] - 4, model, team: lo && lo.team != null ? lo.team : i % 2, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 90, power: 100, weapon: 0,
           ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color: lo ? lo.color : COLORS[i], vy: 0, stock: [], armed: -1, lvl: lo && lo.lvl != null ? lo.lvl : null, ai: net ? !net.occ[i] : i >= numHumans,
           tilt: tiltAt(x), recoil: 0, dead: false};
 }
@@ -1811,7 +1811,7 @@ function startClientRound(m) {
   caves = (m.cv || []).map(([x, w, top, h]) => newCave(x, w, top, h)); saucers = [];
   tanks = m.ai.map((ai, i) => {
     const [model, color, team] = (m.lo && m.lo[i]) || [0, COLORS[i], i % 2], M = TANKS[model];
-    return {i, x: 0, y: 0, tx: 0, ty: 0, ta: 90, tp: 55, init: false, model, team, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 90, power: 55,
+    return {i, x: 0, y: 0, tx: 0, ty: 0, ta: 90, tp: 100, init: false, model, team, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 90, power: 100,
             weapon: 0, ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color, vy: 0, stock: [], armed: -1, ai, tilt: 0, recoil: 0, dead: false};
   });
   shots = []; parts = []; rings = []; flashes = []; popups = []; wheel = null; winner = -1; winTeam = -1; banner = null; strikes = []; beams = []; uiParts = [];
