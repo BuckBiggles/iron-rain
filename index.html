@@ -57,7 +57,7 @@ const STATUS_MULT = 0.5, BURN_DAMAGE = 15, CORRODE_MULT = 1.5;
 const hasStatus = (t, id) => !!(t && t.status && t.status.id === id);
 // Prize-wheel specials: one use each. They go into the tank's stockpile (STOCK_MAX); the player arms one with Q. short = wheel/HUD label, tag = menu blurb
 const SPECIALS = [
-  {name:'NUKE',           short:'NUKE',       icon:'☢️', color:'#ef4444', tag:'Massive blast',     desc:'Massive blast',                       radius:115, damage:100, shots:1, kind:'nuke'},
+  {name:'MINI NUKE',      short:'MINI NUKE',  icon:'☢️', color:'#ef4444', tag:'Massive blast',     desc:'Massive blast',                       radius:115, damage:100, shots:1, kind:'nuke'},
   {name:'CRYO SHELL',     short:'CRYO',       icon:'❄️', color:'#6fb8de', tag:'Frozen: no aim/drive', desc:'FREEZES targets: barrel & tracks locked next turn',   radius:34, damage:40, shots:1, kind:'status', status:STATUSES[1]},
   {name:'MIRV',           short:'MIRV',       icon:'🎆', color:'#f59e0b', tag:'Splits into 5',     desc:'Splits into 5 warheads',              radius:30,  damage:40,  shots:1, kind:'mirv'},
   {name:'ACID SHELL',     short:'ACID',       icon:'🧪', color:'#86c23c', tag:'Corroded: +50% dmg', desc:'CORRODES armor: +50% damage taken next turn',  radius:34, damage:40, shots:1, kind:'status', status:STATUSES[3]},
@@ -1638,6 +1638,18 @@ function updateGame() {
 }
 // ---- hit -> key combo -> prize wheel
 let lastCombo = '';
+// the combo is stored as w/a/s/d, shown on screen as up/left/down/right arrows, and either set of keys enters it
+const COMBO_KEYS = {w: 'w', a: 'a', s: 's', d: 'd', arrowup: 'w', arrowleft: 'a', arrowdown: 's', arrowright: 'd'};
+const COMBO_DIR = {w: -Math.PI / 2, a: Math.PI, s: Math.PI / 2, d: 0};
+function drawComboArrow(k, cx, cy, size, color) {   // a chunky arrow pointing up/left/down/right
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(COMBO_DIR[k] || 0);
+  const L = size, hw = size * .55, sw = size * .2;
+  ctx.beginPath();
+  ctx.moveTo(L * .55, 0); ctx.lineTo(L * .02, -hw); ctx.lineTo(L * .02, -sw); ctx.lineTo(-L * .55, -sw);
+  ctx.lineTo(-L * .55, sw); ctx.lineTo(L * .02, sw); ctx.lineTo(L * .02, hw); ctx.closePath();
+  ctx.fillStyle = color; ctx.fill();
+  ctx.restore();
+}
 function startQuick() {
   let seq;   // W, A, S, D in a fresh random order every time: never plain "WASD", never the same as last time
   do seq = shuffled(['w', 'a', 's', 'd']); while (seq.join('') === 'wasd' || seq.join('') === lastCombo);
@@ -2409,7 +2421,7 @@ const AMMO_INFO = {
   'Big Bomb': 'Heavy shell with a much bigger blast and crater. You get 3 per round.',
   'Triple':   'Fires three smaller shells in a spread, so one of them usually finds the target. 3 per round.',
   'Drill':    'Bores straight through the earth instead of exploding on impact. Punch through a hill at a tank behind it, or drill into a cavern to collapse it. 2 per round.',
-  'NUKE':     'An enormous blast that flattens everything nearby and whites out the screen.',
+  'MINI NUKE':'An enormous blast that flattens everything nearby and whites out the screen.',
   'MIRV':     'Splits into five warheads at the top of its arc, blanketing a wide area.',
   'LUCKY 7':  'Fires seven shells at once: your shot plus three just above it and three just below, in a tight group. On target, several of them hit.',
   'TELEPORT': 'Doesn\'t explode: your tank warps to wherever the shell lands. Great for escaping or flanking.',
@@ -2440,7 +2452,7 @@ function drawInfoCard() {
   panel(x, y, w, h, 10);
   // controls (two rows of key chips)
   const rows = [[['← →', 'Aim'], ['↑ ↓', 'Power'], ['Shift', 'Fine'], ['A D', 'Drive'], ['1-4', 'Weapon'], ['Space', 'Fire']],
-                [['W A S D', 'Auth code'], ['Q', 'Supply'], ['Enter', 'End turn'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
+                [['↑ ← ↓ →', 'Auth code'], ['Q', 'Supply'], ['Enter', 'End turn'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
   rows.forEach((row, r) => {
     let cx = x + 12; const cy = y + 14 + r * 20;
     for (const [k, d] of row) {
@@ -2520,7 +2532,9 @@ function drawQuick() {
     rr(x, ty + bump, sz, sz, 14);
     ctx.fillStyle = done ? '#16a34a' : cur ? 'rgba(255,255,255,.22)' : 'rgba(255,255,255,.07)'; ctx.fill();
     ctx.strokeStyle = done ? '#86efac' : cur ? '#fff' : 'rgba(255,255,255,.25)'; ctx.lineWidth = cur ? 3 : 2; ctx.stroke(); ctx.restore();
-    text(done ? '✓' : k.toUpperCase(), x + sz / 2, ty + sz / 2 + 2 + bump, done ? 38 : 40, done ? '#fff' : cur ? '#fff' : 'rgba(255,255,255,.55)', 'center', '900');
+    const col2 = done ? '#fff' : cur ? '#fff' : 'rgba(255,255,255,.55)';
+    if (done) text('✓', x + sz / 2, ty + sz / 2 + 2 + bump, 38, col2, 'center', '900');
+    else drawComboArrow(k, x + sz / 2, ty + sz / 2 + bump, sz * .5, col2);   // shown as arrows; arrow keys or W A S D both enter them
   });
   ctx.globalAlpha = 1;
   const frac = clamp(1 - q.t / q.limit, 0, 1), bw = 420, by = y0 + 164;
@@ -2644,8 +2658,8 @@ const MISSIONS = [
    brief: 'Under cover of darkness and rain, hit a Bulwark heavy and its escort. Command has released a LUCKY 7 battery to you: press Q to arm it.'},
   {name: 'CAVERN COUNTRY', map: 2, theme: 3, par: 12, stock: ['ORBITAL'], allies: [{model: 2, lvl: 2}], enemies: [{model: 3, lvl: 2}, {model: 7, lvl: 2}],
    brief: 'The enemy has parked its heavies above old caverns. Crack the roofs and drop them in. One orbital strike is authorized.'},
-  {name: 'IRON RAIN', map: 1, theme: 1, par: 14, stock: ['NUKE', 'ORBITAL'], allies: [{model: 7, lvl: 2}], enemies: [{model: 3, lvl: 3}, {model: 4, lvl: 3}],
-   brief: 'The final push. Their best crews, a Mammoth and a Viper, hold the pass. Everything we have is yours: a nuke, an orbital strike and a veteran wingman. Make it rain.'},
+  {name: 'IRON RAIN', map: 1, theme: 1, par: 14, stock: ['MINI NUKE', 'ORBITAL'], allies: [{model: 7, lvl: 2}], enemies: [{model: 3, lvl: 3}, {model: 4, lvl: 3}],
+   brief: 'The final push. Their best crews, a Mammoth and a Viper, hold the pass. Everything we have is yours: a mini nuke, an orbital strike and a veteran wingman. Make it rain.'},
 ];
 let campaign = null, campSel = 0, campResult = null, lastPick = null;
 function campProgress() {
@@ -3312,7 +3326,8 @@ addEventListener('keydown', e => {
   if (paused || !tanks.length) return;
   const t = tanks[turn];
   if (state === 'quick' && qte && !qte.done) {               // the post-hit W/A/S/D combo
-    if ('wasd'.includes(k) && k.length === 1 && !e.repeat && !t.ai && isMine(t)) pressCombo(k);
+    const ck = COMBO_KEYS[k];   // arrow keys and W A S D both work
+    if (ck && !e.repeat && !t.ai && isMine(t)) { e.preventDefault(); pressCombo(ck); }
     return;
   }
   if (state === 'move' && !t.ai && isMine(t) && (k === 'enter' || k === 'e') && !e.repeat) { requestEndMove(); return; }
