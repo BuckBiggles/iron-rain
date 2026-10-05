@@ -26,7 +26,7 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
 - No wind: shells fly on gravity alone. Four weapons: Missile, Big Bomb, Triple, and the **Drill** (2 per round), which bores straight
   through the earth to hit a tank behind a hill, burst out the far side, or break into a cavern and collapse it
 - Land a hit, then key in the four arrows shown (in a random order) with the arrow keys or W A S D, within 3 seconds, to spin the supply-drop wheel. Prizes go into your **stockpile** — keep as many as 8 and press **Q** (or click SUPPLY) to arm one when you want it:
-  Mini Nuke, MIRV, Dirt Bomb, Bouncer, **Lucky 7** (seven shells in a tight group), Teleport, Vampire, **Orbital Strike** (satellite laser),
+  Mini Nuke, MIRV, **Dig Bomb** (blasts a massive pit, tanks fall in), Bouncer, **Lucky 7** (seven shells in a tight group), Teleport, Vampire, **Orbital Strike** (satellite laser),
   and four status shells that last through the victim's next turn: **Incendiary** (burning: 15 damage when it starts),
   **Cryo** (frozen: can't aim or drive), **Acid** (corroded: takes 50% more damage), **EMP** (shorted: half power)
 - **Move after you shoot:** once your shot lands, drive with whatever fuel is left, or press ENTER to end your turn
