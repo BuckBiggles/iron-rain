@@ -16,6 +16,8 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
   Rhino, Scorpion, Kodiak — each with its own ARMOR, MOBILITY and ATTACK, the % of normal damage its shells deal)
   and a colour, then hits READY. CPUs pick at random.
 - **Online multiplayer:** host a room, share the invite link or 5-letter code, friends join from their own browsers
+- **Store:** earn money in battle ($10 per hit, $30 per kill, $50 per win) and spend it on cosmetics: camo patterns
+  (up to Gold Plated), emblems, antenna flags and shell trails. Looks only; your money and upgrades are saved in this browser
 - **Name your tank:** click your unit's name in the armory and type (up to 12 characters); your name is remembered
 - **Opening supply drop:** every tank gets one free spin of the supply-drop wheel at the start of its first turn
 - Local hot-seat play on one screen is still there too

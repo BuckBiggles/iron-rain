@@ -736,7 +736,7 @@ function newTank(i, x) {
   if (x == null) { const slot = WW / numPlayers; x = slot * i + rnd(slot * 0.3, slot * 0.7); }
   const lo = loadout && loadout[i], model = lo ? lo.model : 0, M = TANKS[model];
   return {i, x, y: ground[Math.floor(x)] - 4, model, team: lo && lo.team != null ? lo.team : i % 2, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 90, power: 100, weapon: 0,
-          ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color: lo ? lo.color : COLORS[i], vy: 0, stock: [], armed: -1, lvl: lo && lo.lvl != null ? lo.lvl : null, name: lo ? cleanName(lo.name) : '', ai: net ? !net.occ[i] : i >= numHumans,
+          ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color: lo ? lo.color : COLORS[i], vy: 0, stock: [], armed: -1, lvl: lo && lo.lvl != null ? lo.lvl : null, name: lo ? cleanName(lo.name) : '', cos: cleanCos(lo && lo.cos), ai: net ? !net.occ[i] : i >= numHumans,
           tilt: tiltAt(x), recoil: 0, dead: false};
 }
 function startRound() {
@@ -749,10 +749,10 @@ function startRound() {
   makeCaves();
   tanks = Array.from({length: numPlayers}, (_, i) => newTank(i, xs[order.indexOf(i)]));
   shots = []; parts = []; rings = []; flashes = []; popups = []; pending = []; wheel = null; winner = -1; winTeam = -1; evq = [];
-  strikes = []; beams = []; uiParts = []; resetStats(); nameEdit = -1;
+  strikes = []; beams = []; uiParts = []; resetStats(); nameEdit = -1; roundPay = null;
   hit = [false, false, false, false]; shake = 0; whiteFlash = 0; paused = false; terrainDirty = false; sandActive = false;
   mode = 'play';
-  if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, v => Math.round(v * 10)), np: numPlayers, ai: tanks.map(t => t.ai), lo: tanks.map(t => [t.model, t.color, t.team, t.name]), tm: teamMode,
+  if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, v => Math.round(v * 10)), np: numPlayers, ai: tanks.map(t => t.ai), lo: tanks.map(t => [t.model, t.color, t.team, t.name, t.cos]), tm: teamMode,
                                          cv: caves.map(c => [c.x, c.w, c.top, c.h].map(Math.round))});
   if (campaign) {   // mission set-up: air support for the player, who also gets the first shot
     const m = mission(); lastPick = {model: loadout[0].model, color: loadout[0].color}; campResult = null;
@@ -1686,6 +1686,7 @@ function updateGame() {
           if (!campaign || (teamMode ? winTeam === 0 : winner === 0)) { emit({t: 'conf', x: W / 2, y: H * .3, n: 140, sp: 8}); emit({t: 'sfx', n: 'win'}); }
           else emit({t: 'sfx', n: 'fail'});
         }
+        payRound();   // money for this machine's players
         if (campaign) finishMission();
       } else if (hit[turn] && tanks[turn].hp > 0) {
         hit = [false, false, false, false];
@@ -1883,19 +1884,19 @@ function clientData(m) {
     case 'full': fail2(m.why); break;
     case 'lobby': net.occ = m.occ; numPlayers = m.np; teamMode = !!m.tm; break;
     case 'round': startClientRound(m); break;
-    case 'arm': loadout = m.p; armoryGo = m.go || 0; teamMode = !!m.tm; if (Number.isInteger(m.mp) && MAPS[m.mp]) mapIdx = m.mp; if (CPU_LEVELS[m.cl]) cpuLevel = m.cl; if (mode !== 'armory') { mode = 'armory'; menuButtons = []; nameEdit = -1; const nm = savedName(), mine = loadout[net.seat]; if (nm && mine && !mine.name) requestPick(net.seat, {name: nm}); } break;
+    case 'arm': loadout = m.p; armoryGo = m.go || 0; teamMode = !!m.tm; if (Number.isInteger(m.mp) && MAPS[m.mp]) mapIdx = m.mp; if (CPU_LEVELS[m.cl]) cpuLevel = m.cl; if (mode !== 'armory') { mode = 'armory'; menuButtons = []; nameEdit = -1; const nm = savedName(), mine = loadout[net.seat]; if (mine) requestPick(net.seat, {name: mine.name || nm, cos: loadProfile().equip}); } break;
     case 's': applySnap(m); break;
   }
 }
 function fail2(msg) { leaveRoom(msg || 'Could not join.'); menuStage = 'join'; }
 
 function startClientRound(m) {
-  numPlayers = m.np; makeScene(m.th, m.g); teamMode = !!m.tm; resetStats();
+  numPlayers = m.np; makeScene(m.th, m.g); teamMode = !!m.tm; resetStats(); roundPay = null;
   caves = (m.cv || []).map(([x, w, top, h]) => newCave(x, w, top, h)); saucers = [];
   tanks = m.ai.map((ai, i) => {
-    const [model, color, team, name] = (m.lo && m.lo[i]) || [0, COLORS[i], i % 2, ''], M = TANKS[model];
+    const [model, color, team, name, cos] = (m.lo && m.lo[i]) || [0, COLORS[i], i % 2, '', null], M = TANKS[model];
     return {i, x: 0, y: 0, tx: 0, ty: 0, ta: 90, tp: 100, init: false, model, team, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 90, power: 100,
-            weapon: 0, ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color, vy: 0, stock: [], armed: -1, name: cleanName(name), ai, tilt: 0, recoil: 0, dead: false};
+            weapon: 0, ammo: WEAPONS.map(w => w.ammo), fuel: M.fuel, maxFuel: M.fuel, color, vy: 0, stock: [], armed: -1, name: cleanName(name), cos: cleanCos(cos), ai, tilt: 0, recoil: 0, dead: false};
   });
   shots = []; parts = []; rings = []; flashes = []; popups = []; wheel = null; winner = -1; winTeam = -1; banner = null; strikes = []; beams = []; uiParts = [];
   shake = 0; whiteFlash = 0; state = 'aim'; turn = 0; mode = 'play'; net.sent = false;
@@ -1905,6 +1906,7 @@ function applySnap(m) {
   const prevMine = (state === 'aim' || state === 'move') && turn === net.seat;
   if (m.ss) stats = m.ss.map(([shots, hits, dmg, kills]) => ({shots, hits, dmg, kills}));
   state = m.st; turn = m.tn; wind = m.w; winner = m.wn; winTeam = m.wt; wins = m.ws; turnLeft = m.tl || 0;
+  if (state === 'over' && m.ss) payRound();   // a client pays out from the host's final stats
   const nowMine = (state === 'aim' || state === 'move') && turn === net.seat;
   if (state !== 'aim') net.sent = false;
   if (m.g) for (let x = 0; x < WW; x++) {
@@ -2138,15 +2140,14 @@ function drawTank(t, active, preview) {
   const hg = ctx.createLinearGradient(0, hullTop, 0, -12.5); hg.addColorStop(0, light); hg.addColorStop(1, dark);
   poly(M.hull); ctx.fillStyle = hg; ctx.fill();
   ctx.save(); poly(M.hull); ctx.clip();
-  ctx.fillStyle = dead ? '#23221e' : dark; for (const [cx, cy, rx, ry, rot] of CAMO) { ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, rot, 0, TAU); ctx.fill(); }
-  ctx.fillStyle = dead ? '#2a2924' : 'rgba(70,58,34,.55)'; for (const [cx, cy, rx, ry, rot] of CAMO) { ctx.beginPath(); ctx.ellipse(cx + 7, cy + 2.5, rx * .55, ry * .7, -rot, 0, TAU); ctx.fill(); }
+  paintCamo(t, hullTop, -12.5, dead, dark);   // camo pattern (store cosmetic)
   metalShade(hullTop, -12.5, t);
   ctx.restore();
   poly(M.hull); ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1; ctx.stroke();
   if (M.era) { ctx.fillStyle = shade(col, -.15); ctx.strokeStyle = 'rgba(0,0,0,.45)'; for (let x = -14; x <= 10; x += 6) { ctx.fillRect(x, hullTop + 1.5, 4.6, 3.4); ctx.strokeRect(x, hullTop + 1.5, 4.6, 3.4); } }   // reactive armor bricks
   else { ctx.fillStyle = 'rgba(0,0,0,.45)'; for (let i = 0; i < 4; i++) ctx.fillRect(-14 + i * 2.4, hullTop + 2, 1.4, 3); }   // engine louvers
   if (!dead) {
-    ctx.fillStyle = INK; ctx.globalAlpha = .85; star(13, -15.2, 2.6); ctx.fill(); ctx.globalAlpha = 1;   // allied star insignia
+    ctx.save(); poly(M.hull); ctx.clip(); drawEmblem(t); ctx.restore();   // insignia (star by default; a store cosmetic), kept inside the hull
     ctx.fillStyle = '#f5e9a8'; ctx.fillRect(18.6, -15.4, 2, 1.6);                                          // headlamp
     if (theme.name === 'Night' && !preview) {   // headlight beam cutting through the dark and the rain
       const hg2 = ctx.createLinearGradient(20, 0, 150, 0); hg2.addColorStop(0, 'rgba(255,240,190,.32)'); hg2.addColorStop(1, 'rgba(255,240,190,0)');
@@ -2178,12 +2179,13 @@ function drawTank(t, active, preview) {
     topY = hullTop - M.dome.ry;
     const dg = ctx.createLinearGradient(0, topY, 0, hullTop); dg.addColorStop(0, light); dg.addColorStop(1, dark);
     ctx.beginPath(); ctx.ellipse(0, hullTop + .5, M.dome.rx, M.dome.ry, 0, Math.PI, 0); ctx.closePath(); ctx.fillStyle = dg; ctx.fill();
+    if (t.cos && t.cos.camo !== 'std') { ctx.save(); ctx.beginPath(); ctx.ellipse(0, hullTop + .5, M.dome.rx, M.dome.ry, 0, Math.PI, 0); ctx.closePath(); ctx.clip(); paintCamo(t, topY, hullTop, dead, dark, true); ctx.restore(); }
     ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1; ctx.stroke();
   } else {
     topY = Math.min(...M.turret.map(p => p[1]));
     const tg = ctx.createLinearGradient(0, topY, 0, hullTop); tg.addColorStop(0, light); tg.addColorStop(1, dark);
     poly(M.turret); ctx.fillStyle = tg; ctx.fill();
-    ctx.save(); poly(M.turret); ctx.clip(); ctx.fillStyle = dead ? '#23221e' : dark; ctx.beginPath(); ctx.ellipse(-6, topY + 4, 6, 3, .3, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.ellipse(7, topY + 6.5, 5, 2.4, -.2, 0, TAU); ctx.fill(); metalShade(topY, hullTop, t); ctx.restore();
+    ctx.save(); poly(M.turret); ctx.clip(); paintCamo(t, topY, hullTop, dead, dark, true); metalShade(topY, hullTop, t); ctx.restore();
     poly(M.turret); ctx.strokeStyle = 'rgba(0,0,0,.5)'; ctx.lineWidth = 1; ctx.stroke();
   }
   ctx.fillStyle = '#1d1e19'; ctx.beginPath(); ctx.ellipse(-3.5, topY - .4, 3.4, 1.4, 0, 0, TAU); ctx.fill();   // commander hatch
@@ -2193,6 +2195,7 @@ function drawTank(t, active, preview) {
     ctx.strokeStyle = '#1b1c18'; ctx.lineWidth = 1;
     if (M.antennas > 0) { ctx.beginPath(); ctx.moveTo(-9, topY + .5); ctx.lineTo(-13, topY - 15); ctx.stroke(); }   // whip antennas
     if (M.antennas > 1) { ctx.beginPath(); ctx.moveTo(-6, topY + .5); ctx.lineTo(-7, topY - 11); ctx.stroke(); }
+    drawFlag(t, M, topY, hullTop);
     ctx.fillStyle = INK; ctx.globalAlpha = .8; star(-1.5, (topY + hullTop) / 2 + .5, 2.3); ctx.fill(); ctx.globalAlpha = 1;
   }
   ctx.restore();
@@ -2237,10 +2240,11 @@ function drawAimHelpers(t) {
 
 function drawShots() {
   for (const s of shots) {
-    const c = s.w.color || '#fff';
+    const c = s.w.color || '#fff', ow = tanks[s.owner != null ? s.owner : turn];
+    const tr = {trail: (ow && ow.cos && ow.cos.trail) || 'standard'};   // the firer's shell-trail cosmetic
     ctx.lineCap = 'round';
     for (let i = 1; i < s.trail.length; i++) {
-      ctx.globalAlpha = i / s.trail.length * .7; ctx.strokeStyle = c; ctx.lineWidth = 1 + i / s.trail.length * 3;
+      ctx.globalAlpha = i / s.trail.length * .7; ctx.strokeStyle = trailColor(tr, i, s.trail.length, c); ctx.lineWidth = 1 + i / s.trail.length * 3;
       ctx.beginPath(); ctx.moveTo(s.trail[i - 1][0], s.trail[i - 1][1]); ctx.lineTo(s.trail[i][0], s.trail[i][1]); ctx.stroke();
     }
     ctx.globalAlpha = 1;
@@ -2711,6 +2715,11 @@ function drawOver() {
   else text(winner >= 0 ? '🏆' : '🤝', W / 2, py + 40, 40, '#fff', 'center');
   if (cr) text(cr.won ? 'MISSION ACCOMPLISHED' : 'MISSION FAILED', W / 2, py + 92, 34, col, 'center', '900');
   else text(teamWin ? `TEAM ${TEAMS[winTeam].name} HOLDS THE FIELD` : winner >= 0 ? `${unitName(winner)} HOLDS THE FIELD` : 'STALEMATE', W / 2, py + 92, 34, col, 'center', '900');
+  if (roundPay && roundPay.total > 0) {   // what this machine's player(s) earned for the store
+    text(`+$${roundPay.total}`, W / 2 + 296, py + 30, 24, '#e8c547', 'right', '900', 'rgba(0,0,0,.6)');
+    const parts2 = [roundPay.hits && roundPay.hits + (roundPay.hits > 1 ? ' hits' : ' hit'), roundPay.kills && roundPay.kills + (roundPay.kills > 1 ? ' kills' : ' kill'), roundPay.wins && 'win'];
+    text(parts2.filter(Boolean).join(' · '), W / 2 + 296, py + 54, 10, INK_DIM, 'right', '800');
+  }
   // after-action report
   const cols = [['UNIT', W / 2 - 270, 'left'], ['WINS', W / 2 - 80, 'center'], ['DAMAGE', W / 2 + 20, 'center'], ['ACCURACY', W / 2 + 130, 'center'], ['KILLS', W / 2 + 240, 'center']];
   const hy = py + 140;
@@ -2777,7 +2786,7 @@ function startMission(idx) {   // set up the armory for a mission: the player's 
   net = null; numHumans = 1; numPlayers = 1 + (m.allies || []).length + m.enemies.length; mapIdx = m.map;
   teamMode = numPlayers > 2;
   const used = [], take = prefer => { const c = prefer.find(c => !used.includes(c)) || PALETTE.find(c => !used.includes(c)); used.push(c); return c; };
-  const me = {model: lastPick ? lastPick.model : 0, color: take([lastPick ? lastPick.color : COLORS[0]]), ready: false, cpu: false, team: 0};
+  const me = {model: lastPick ? lastPick.model : 0, color: take([lastPick ? lastPick.color : COLORS[0]]), ready: false, cpu: false, team: 0, name: savedName(), cos: loadProfile().equip};
   loadout = [me];
   for (const a of m.allies || []) loadout.push({model: a.model, color: take(['#6f93b3', '#4a5f86', '#d9dccf']), ready: true, cpu: true, team: 0, lvl: a.lvl});
   for (const e of m.enemies) loadout.push({model: e.model, color: take(['#c0583d', '#3d4248', '#8f8f86', '#9c6b8f']), ready: true, cpu: true, team: 1, lvl: e.lvl});
@@ -2860,6 +2869,174 @@ function drawCampaign() {   // the mission board: list on the left, the selected
   if (best && !locked) { text('BEST', dx + 30, dy + dh - 32, 14, PAPER_INK, 'left', '900'); drawStars(best, dx + 74, dy + dh - 33, 20); }
   if (locked) ttext('Complete the previous mission to unlock this one.', dx + 30, dy + dh - 32, 12.5, STAMP);
   else if (button(dx + dw - 230, dy + dh - 84, 206, 66, 'DEPLOY', 'ENTER · choose your tank', null, STAMP, () => startMission(campSel))) any = true;
+  cv.style.cursor = any ? 'pointer' : 'default';
+}
+
+// ====================================================== store: cosmetic upgrades bought with money earned in battle
+// Money: $10 per shot that hits an enemy, $30 per kill, $50 for a win. Paid to the human player(s) on this machine.
+// Everything (money, what you own, what you have equipped) is kept in this browser's localStorage. Cosmetics are looks
+// only: camo and emblems are painted inside the hull, flags fly from the antenna (which isn't part of the hitbox either).
+const PAY = {hit: 10, kill: 30, win: 50};
+const COSMETICS = {
+  camo: [
+    {id: 'std', name: 'FIELD STANDARD', price: 0}, {id: 'wood', name: 'WOODLAND', price: 150}, {id: 'desert', name: 'DESERT STORM', price: 200},
+    {id: 'urban', name: 'URBAN DIGITAL', price: 300}, {id: 'arctic', name: 'ARCTIC SPLINTER', price: 350}, {id: 'tiger', name: 'TIGER STRIPES', price: 500},
+    {id: 'gold', name: 'GOLD PLATED', price: 2000}],
+  emblem: [
+    {id: 'star', name: 'ALLIED STAR', price: 0}, {id: 'bolt', name: 'LIGHTNING', price: 120}, {id: 'skull', name: 'SKULL', price: 150},
+    {id: 'ace', name: 'ACE OF SPADES', price: 200}, {id: 'flame', name: 'HOT ROD FLAMES', price: 250}, {id: 'shark', name: 'SHARK MOUTH', price: 300}],
+  flag: [
+    {id: 'none', name: 'NO FLAG', price: 0}, {id: 'white', name: 'WHITE PENNANT', price: 60}, {id: 'red', name: 'RED PENNANT', price: 80},
+    {id: 'checker', name: 'CHECKERED', price: 150}, {id: 'jolly', name: 'JOLLY ROGER', price: 250}],
+  trail: [
+    {id: 'standard', name: 'STANDARD ISSUE', price: 0}, {id: 'toxic', name: 'TOXIC GREEN', price: 120}, {id: 'royal', name: 'ROYAL PURPLE', price: 150},
+    {id: 'inferno', name: 'INFERNO', price: 250}, {id: 'rainbow', name: 'RAINBOW', price: 600}],
+};
+const COS_CATS = [['camo', 'CAMO'], ['emblem', 'EMBLEMS'], ['flag', 'FLAGS'], ['trail', 'SHELL TRAILS']];
+const COS_DEFAULT = {camo: 'std', emblem: 'star', flag: 'none', trail: 'standard'};
+const cosItem = (cat, id) => COSMETICS[cat].find(c => c.id === id) || COSMETICS[cat][0];
+function cleanCos(c) {   // only known ids get through (used for anything that arrives over the network)
+  const out = {}; for (const [cat] of COS_CATS) out[cat] = c && COSMETICS[cat].some(x => x.id === c[cat]) ? c[cat] : COS_DEFAULT[cat];
+  return out;
+}
+function loadProfile() {
+  try { const p = JSON.parse(localStorage.getItem('ironrain.profile') || 'null'); if (p && typeof p.money === 'number') return {money: Math.max(0, p.money | 0), owned: Array.isArray(p.owned) ? p.owned : [], equip: cleanCos(p.equip)}; } catch (e) {}
+  return {money: 0, owned: [], equip: {...COS_DEFAULT}};
+}
+function saveProfile(p) { try { localStorage.setItem('ironrain.profile', JSON.stringify(p)); } catch (e) {} }
+const owns = (p, cat, id) => cosItem(cat, id).price === 0 || p.owned.includes(cat + ':' + id);
+
+// ---- round payout: once per round, for this machine's human tanks
+let roundPay = null;
+function payRound() {
+  if (roundPay || !tanks.length) return;
+  const mine = tanks.filter(t => net ? t.i === net.seat : t.i < numHumans);   // the seats played from this machine
+  let hits = 0, kills = 0, wins = 0;
+  for (const t of mine) {
+    const s = stats[t.i] || {hits: 0, kills: 0}; hits += s.hits; kills += s.kills;
+    if (teamMode ? winTeam >= 0 && winTeam === t.team : winner === t.i) wins++;
+  }
+  const total = hits * PAY.hit + kills * PAY.kill + wins * PAY.win;
+  roundPay = {hits, kills, wins, total};
+  if (total > 0) { const p = loadProfile(); p.money += total; saveProfile(p); }
+}
+
+// ---- drawing the cosmetics on a tank (called from drawTank, in the tank's own frame)
+function paintCamo(t, y0, y1, dead, dark, turret) {   // inside the hull / turret clip
+  const k = (t.cos && t.cos.camo) || 'std', h = y1 - y0;
+  if (dead) { ctx.fillStyle = '#23221e'; for (const [cx, cy, rx, ry, rot] of CAMO) { ctx.beginPath(); ctx.ellipse(cx, turret ? y0 + 4 : cy, rx, ry, rot, 0, TAU); ctx.fill(); } return; }
+  if (k === 'std') {
+    if (turret) { ctx.fillStyle = dark; ctx.beginPath(); ctx.ellipse(-6, y0 + 4, 6, 3, .3, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.ellipse(7, y0 + 6.5, 5, 2.4, -.2, 0, TAU); ctx.fill(); return; }
+    ctx.fillStyle = dark; for (const [cx, cy, rx, ry, rot] of CAMO) { ctx.beginPath(); ctx.ellipse(cx, cy, rx, ry, rot, 0, TAU); ctx.fill(); }
+    ctx.fillStyle = 'rgba(70,58,34,.55)'; for (const [cx, cy, rx, ry, rot] of CAMO) { ctx.beginPath(); ctx.ellipse(cx + 7, cy + 2.5, rx * .55, ry * .7, -rot, 0, TAU); ctx.fill(); }
+    return;
+  }
+  if (k === 'gold') {
+    const gg = ctx.createLinearGradient(-20, y0, 20, y1); gg.addColorStop(0, '#fff2b0'); gg.addColorStop(.35, '#e2b43c'); gg.addColorStop(.6, '#9a6f14'); gg.addColorStop(1, '#e9c55a');
+    ctx.fillStyle = gg; ctx.fillRect(-30, y0 - 2, 60, h + 4);
+    ctx.fillStyle = 'rgba(255,255,240,.9)'; const s = (T * .7) % 70 - 30; ctx.fillRect(s, y0, 2.2, h);   // a glint sweeping across
+    return;
+  }
+  const blot = (cols, n, seed, rx0, rx1) => cols.forEach((c, ci) => { ctx.fillStyle = c; for (let i = 0; i < n; i++) { const u = hash01(seed + i * 7.3 + ci * 31); ctx.beginPath(); ctx.ellipse(-22 + u * 44, y0 + hash01(seed + i * 3.1 + ci) * h, rx0 + hash01(i + ci * 5) * (rx1 - rx0), (rx0 + 1) * .55, hash01(i * 9 + ci) * 3, 0, TAU); ctx.fill(); } });
+  if (k === 'wood') blot(['rgba(42,62,30,.85)', 'rgba(90,72,40,.8)', 'rgba(20,24,14,.8)'], 5, 11, 2.5, 6);
+  else if (k === 'desert') blot(['rgba(200,166,108,.85)', 'rgba(142,110,68,.75)'], 5, 23, 3, 7);
+  else if (k === 'urban') { for (let x = -22; x < 22; x += 2) for (let y = Math.floor(y0); y < y1; y += 2) { const u = hash01(x * 13.1 + y * 7.7); if (u < .45) { ctx.fillStyle = u < .15 ? 'rgba(40,42,46,.8)' : u < .3 ? 'rgba(120,124,128,.75)' : 'rgba(190,192,194,.7)'; ctx.fillRect(x, y, 2, 2); } } }
+  else if (k === 'arctic') { ctx.fillStyle = 'rgba(232,236,238,.8)'; ctx.fillRect(-30, y0 - 2, 60, h + 4); for (let i = 0; i < 6; i++) { ctx.fillStyle = i % 2 ? 'rgba(120,130,138,.75)' : 'rgba(60,66,72,.7)'; const x = -20 + hash01(i * 4.7) * 40, y = y0 + hash01(i * 2.3) * h; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 7, y + 1.5); ctx.lineTo(x + 2, y + 4); ctx.closePath(); ctx.fill(); } }
+  else if (k === 'tiger') { ctx.fillStyle = 'rgba(16,14,10,.85)'; for (let x = -24; x < 24; x += 5) { ctx.beginPath(); ctx.moveTo(x, y0 - 1); ctx.lineTo(x + 3, y0 - 1); ctx.lineTo(x + 1.5, y1 + 1); ctx.lineTo(x - 1, y1 + 1); ctx.closePath(); ctx.fill(); } }
+}
+function drawEmblem(t) {   // on the hull side, where the star used to be (the shark mouth goes on the nose)
+  const k = (t.cos && t.cos.emblem) || 'star', x = 13, y = -15.2;
+  ctx.globalAlpha = .9;
+  if (k === 'star') { ctx.fillStyle = INK; star(x, y, 2.6); ctx.fill(); }
+  else if (k === 'bolt') { ctx.fillStyle = '#ffd84a'; poly([[x + 1, y - 3.2], [x - 2.2, y + .4], [x - .2, y + .4], [x - 1.2, y + 3.2], [x + 2.4, y - .6], [x + .4, y - .6]]); ctx.fill(); }
+  else if (k === 'skull') { ctx.fillStyle = '#ecebe2'; ctx.beginPath(); ctx.arc(x, y - .6, 2.4, 0, TAU); ctx.fill(); ctx.fillRect(x - 1.4, y + 1, 2.8, 1.6); ctx.fillStyle = '#111'; ctx.fillRect(x - 1.5, y - 1.2, 1.1, 1.1); ctx.fillRect(x + .4, y - 1.2, 1.1, 1.1); }
+  else if (k === 'ace') { ctx.fillStyle = '#ecebe2'; ctx.fillRect(x - 2.4, y - 3.2, 4.8, 6.4); ctx.fillStyle = '#111'; ctx.beginPath(); ctx.moveTo(x, y - 2.2); ctx.quadraticCurveTo(x + 2.2, y, x, y + .9); ctx.quadraticCurveTo(x - 2.2, y, x, y - 2.2); ctx.fill(); ctx.fillRect(x - .4, y + .6, .8, 1.4); }
+  else if (k === 'flame') { ctx.fillStyle = '#f07a2c'; poly([[x - 9, y + 2.5], [x - 4, y - 2.5], [x - 4, y + .2], [x + 1, y - 3], [x, y + .5], [x + 4, y - 1.6], [x + 3, y + 2.5]]); ctx.fill(); ctx.fillStyle = '#ffd84a'; poly([[x - 6, y + 2.5], [x - 3, y - .6], [x - 2.5, y + 1.2], [x + 1, y - 1], [x + 1.5, y + 2.5]]); ctx.fill(); }
+  else if (k === 'shark') {   // teeth along the nose of the hull
+    ctx.fillStyle = '#7a1414'; poly([[12, -16], [21, -15], [18.5, -12.8], [12, -13.3]]); ctx.fill();
+    ctx.fillStyle = '#f2f2ea'; for (let i = 0; i < 4; i++) { const tx = 12.8 + i * 2; poly([[tx, -16], [tx + 1.8, -16], [tx + .9, -14.6]]); ctx.fill(); poly([[tx, -13.3], [tx + 1.8, -13.3], [tx + .9, -14.5]]); ctx.fill(); }
+    ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(10, -16.6, .9, 0, TAU); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+function drawFlag(t, M, topY, hullTop) {   // flies from the whip antenna (or a little rear mast on antenna-less tanks)
+  const k = (t.cos && t.cos.flag) || 'none'; if (k === 'none') return;
+  let fx, fy;
+  if (M.antennas > 0) { fx = -13; fy = topY - 15; }
+  else { fx = -15; fy = hullTop - 14; ctx.strokeStyle = '#1b1c18'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(-15, hullTop); ctx.lineTo(fx, fy); ctx.stroke(); }
+  const wv = Math.sin(T * .15 + t.i) * 1.2, w = 9, h = 5.5;
+  ctx.save(); ctx.translate(fx, fy);
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(-w / 2, wv, -w, wv * .5); ctx.lineTo(-w, h + wv * .5); ctx.quadraticCurveTo(-w / 2, h + wv, 0, h); ctx.closePath();
+  if (k === 'checker') { ctx.save(); ctx.clip(); for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) { ctx.fillStyle = (i + j) % 2 ? '#111' : '#f4f4ee'; ctx.fillRect(-w + i * w / 4, -2 + j * (h + 2) / 3, w / 4 + .2, (h + 2) / 3 + .2); } ctx.restore(); }
+  else { ctx.fillStyle = k === 'red' ? '#c0392b' : k === 'jolly' ? '#141414' : '#f2f0e6'; ctx.fill(); }
+  if (k === 'jolly') { ctx.fillStyle = '#f2f0e6'; ctx.beginPath(); ctx.arc(-w / 2, h / 2 - .4, 1.3, 0, TAU); ctx.fill(); ctx.fillRect(-w / 2 - 2.2, h / 2 + 1, 4.4, .7); }
+  ctx.restore();
+}
+function trailColor(s, i, n, base) {   // shell trail styles
+  const k = s.trail || 'standard';
+  if (k === 'toxic') return '#7CFC00';
+  if (k === 'royal') return '#b26bff';
+  if (k === 'inferno') return i / n > .6 ? '#ffd84a' : i / n > .3 ? '#ff7a1a' : '#c0261a';
+  if (k === 'rainbow') return `hsl(${(i * 22 + T * 6) % 360},95%,62%)`;
+  return base;
+}
+
+// ---- the store screen (menu stage 'store')
+let storeCat = 'camo', storeMsg = null;
+function storeBuyOrEquip(cat, it) {
+  const p = loadProfile();
+  if (owns(p, cat, it.id)) { p.equip[cat] = it.id; saveProfile(p); sfx.click(); storeMsg = {s: `${it.name} EQUIPPED`, t: T, ok: true}; return; }
+  if (p.money < it.price) { sfx.fail(); storeMsg = {s: `NEED $${it.price - p.money} MORE`, t: T, ok: false}; return; }
+  p.money -= it.price; p.owned.push(cat + ':' + it.id); p.equip[cat] = it.id; saveProfile(p);
+  sfx.prize(); storeMsg = {s: `PURCHASED: ${it.name}`, t: T, ok: true};
+}
+function storePreviewTank(x, y, scale, cos, model) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(scale, scale);
+  drawTank({model: model || 0, color: (lastPick && lastPick.color) || COLORS[0], x: 0, y: -4, tilt: 0, angle: 35, recoil: 0, hp: 1, i: 0, cos}, false, true);
+  ctx.restore();
+}
+function drawStore() {
+  const p = loadProfile(); let any = false;
+  text('QUARTERMASTER\'S STORE', W / 2 - 140, 190, 16, INK, 'center', '800', 'rgba(0,0,0,.6)');
+  text(`$${p.money.toLocaleString()}`, W / 2 + 200, 190, 22, '#e8c547', 'center', '900', 'rgba(0,0,0,.7)');
+  text(`earn $${PAY.hit} per hit · $${PAY.kill} per kill · $${PAY.win} per win`, W / 2 + 200, 210, 10, INK_DIM, 'center', '700');
+  // category tabs
+  COS_CATS.forEach(([cat, label], i) => {
+    const x = 40 + i * 166, y = 222, sel = storeCat === cat;
+    if (smallBtn(x, y, 156, 30, label, '#d4a417', () => { storeCat = cat; sfx.click(); }, sel)) any = true;
+  });
+  // item cards
+  const items = COSMETICS[storeCat], model = (lastPick && lastPick.model) || 0;
+  items.forEach((it, i) => {
+    const cx = 40 + (i % 3) * 218, cy = 262 + Math.floor(i / 3) * 112, cw = 208, ch = 104;
+    const own = owns(p, storeCat, it.id), eq = p.equip[storeCat] === it.id, afford = p.money >= it.price;
+    const hov = inRect(mouse, {x: cx, y: cy, w: cw, h: ch}); if (hov) any = true;
+    paper(cx, cy - (hov ? 2 : 0), cw, ch, 61 + i, hov ? 1 : 0);
+    const oy = cy - (hov ? 2 : 0);
+    const cos = {...COS_DEFAULT, [storeCat]: it.id};   // the item on its own, on a plain tank
+    if (storeCat === 'trail') {   // a sample arc in that trail style
+      const n = 18; ctx.lineCap = 'round';
+      for (let k = 1; k < n; k++) {
+        const a0 = (k - 1) / n, a1 = k / n, X = u => cx + 20 + u * 168, Y = u => oy + 62 - Math.sin(u * Math.PI) * 34;
+        ctx.globalAlpha = k / n; ctx.strokeStyle = trailColor({trail: it.id}, k, n, '#ffd966'); ctx.lineWidth = 1 + k / n * 3;
+        ctx.beginPath(); ctx.moveTo(X(a0), Y(a0)); ctx.lineTo(X(a1), Y(a1)); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    } else storePreviewTank(cx + cw / 2 + (storeCat === 'flag' ? 34 : 0), oy + 74, 1.5, cos, model);
+    text(it.name, cx + 12, oy + 16, 12, PAPER_INK, 'left', '900');
+    if (eq) stamp('EQUIPPED', cx + cw - 46, oy + 84, 10, -.12, '#2f6b2a');
+    else if (own) ttext('OWNED · click to equip', cx + 12, oy + ch - 12, 10, 'rgba(43,35,22,.75)');
+    else { text(`$${it.price}`, cx + cw - 12, oy + 16, 14, afford ? '#2f6b2a' : STAMP, 'right', '900'); ttext(afford ? 'click to buy' : 'not enough money', cx + 12, oy + ch - 12, 10, afford ? 'rgba(43,35,22,.75)' : STAMP); }
+    menuButtons.push({x: cx, y: cy, w: cw, h: ch, action: () => storeBuyOrEquip(storeCat, it)});
+  });
+  // your tank as it looks now
+  const px = 720, py = 222, pw = 360, ph = 372;
+  paper(px, py, pw, ph, 77); tape(px + pw / 2, py + 2, 90, .04);
+  text('YOUR TANK', px + pw - 22, py + 30, 18, PAPER_INK, 'right', '900');
+  storePreviewTank(px + pw / 2, py + 196, 3.6, p.equip, model);
+  COS_CATS.forEach(([cat, label], i) => { ttext(`${label}:`, px + 28, py + 228 + i * 24, 11, 'rgba(43,35,22,.7)'); text(cosItem(cat, p.equip[cat]).name, px + 150, py + 228 + i * 24, 12, PAPER_INK, 'left', '900'); });
+  ttext('Shown on your tank in every game, online too.', px + pw / 2, py + ph - 22, 10, 'rgba(43,35,22,.65)', 'center');
+  if (storeMsg && T - storeMsg.t < 150) text(storeMsg.s, px + pw / 2, py + ph + 18, 14, storeMsg.ok ? '#9cc255' : '#fca5a5', 'center', '900', 'rgba(0,0,0,.7)');
   cv.style.cursor = any ? 'pointer' : 'default';
 }
 // ====================================================== drawing: menu
@@ -2958,7 +3135,8 @@ function enterArmory() {
   for (let i = 0; i < numPlayers; i++) if (!seatIsCPU(i)) {   // humans first, each on a different default tank + colour
     const free = PALETTE.filter(c => !takenColors(i).includes(c));
     loadout[i] = {model: i % TANKS.length, color: free.includes(COLORS[i]) ? COLORS[i] : free[0], ready: false, cpu: false,
-                  name: (net ? i === net.seat : i === 0) ? savedName() : ''};   // your remembered name on your own seat
+                  name: (net ? i === net.seat : i === 0) ? savedName() : '',   // your remembered name and look on your own seat
+                  cos: (net ? i === net.seat : i === 0) ? loadProfile().equip : {...COS_DEFAULT}};
   }
   for (let i = 0; i < numPlayers; i++) if (!loadout[i]) loadout[i] = cpuPick(i);   // CPUs get a random tank + unused colour
   if (numPlayers < 3) teamMode = false;                                            // teams need at least 3 tanks
@@ -2987,6 +3165,7 @@ function armoryChange(i, ch) {   // validated change to one seat's pick (local i
   if (Number.isInteger(ch.model)) p.model = ((ch.model % TANKS.length) + TANKS.length) % TANKS.length;
   if (typeof ch.color === 'string' && PALETTE.includes(ch.color) && !takenColors(i).includes(ch.color)) p.color = ch.color;
   if (typeof ch.name === 'string') p.name = cleanName(ch.name);
+  if (ch.cos && typeof ch.cos === 'object') p.cos = cleanCos(ch.cos);
   if ((ch.team === 0 || ch.team === 1) && teamMode) { p.team = ch.team; balanceTeams(); }
   if (typeof ch.ready === 'boolean') p.ready = ch.ready;
 }
@@ -3090,7 +3269,7 @@ function drawArmory() {
     rr(px + 12, py + 50, pw - 24, 130, 10); ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fill();
     ctx.fillStyle = 'rgba(120,110,80,.25)'; ctx.fillRect(px + 14, py + 158, pw - 28, 3);
     ctx.save(); ctx.translate(px + pw / 2, py + 158); ctx.scale(2.5, 2.5);
-    drawTank({model: p.model, color: p.color, x: 0, y: -4, tilt: 0, angle: 30, recoil: 0, hp: 1, i}, false, true);
+    drawTank({model: p.model, color: p.color, x: 0, y: -4, tilt: 0, angle: 30, recoil: 0, hp: 1, i, cos: p.cos}, false, true);
     ctx.restore();
     if (mine) {
       if (smallBtn(px + 16, py + 92, 30, 46, '◀', p.color, () => requestPick(i, {model: p.model - 1}), false)) any = true;
@@ -3270,13 +3449,15 @@ function drawMenu() {
   drawPosterHeader();
   // a back button in the same place on every screen past the first (Esc / Backspace do the same)
   const toHome = () => { menuStage = 'home'; netMsg = ''; sfx.click(); };
-  const back = {count: ['◀ BACK', toHome], hostcount: ['◀ BACK', toHome], join: ['◀ BACK', toHome], campaign: ['◀ BACK', toHome],
+  const back = {count: ['◀ BACK', toHome], hostcount: ['◀ BACK', toHome], join: ['◀ BACK', toHome], campaign: ['◀ BACK', toHome], store: ['◀ BACK', toHome],
                 humans: ['◀ BACK', () => { menuStage = 'count'; sfx.click(); }],
                 connecting: ['◀ CANCEL', () => leaveRoom()],
                 lobby: [net && net.role === 'host' ? '◀ CLOSE ROOM' : '◀ LEAVE', () => leaveRoom()]}[menuStage];
   const backHov = back ? button(20, 14, 180, 40, back[0], '', null, '#c0583d', back[1]) : false;
 
   if (menuStage === 'campaign') { drawCampaign(); if (backHov) cv.style.cursor = 'pointer'; drawUIParts(); return; }
+  if (menuStage === 'store') { drawStore(); if (backHov) cv.style.cursor = 'pointer'; drawUIParts(); return; }
+  const storeHov = menuStage === 'home' && button(W - 236, 14, 216, 40, `STORE  $${loadProfile().money.toLocaleString()}`, '', null, '#e8c547', () => { menuStage = 'store'; sfx.click(); });
   if (['join', 'connecting', 'lobby'].includes(menuStage)) { drawOnlineMenus(); if (backHov) cv.style.cursor = 'pointer'; return; }
   let any = false;
   if (menuStage === 'home') {
@@ -3304,7 +3485,7 @@ function drawMenu() {
       if (button(x0 + i * (bw + gap), 218, bw, 96, n + '', sub, n, COLORS[i % 4], () => pickHumans(n))) any = true;
     });
   }
-  cv.style.cursor = any || backHov ? 'pointer' : 'default';
+  cv.style.cursor = any || backHov || storeHov ? 'pointer' : 'default';
 
   // the briefing documents: a typed field manual and the supply manifest, taped down on the table
   paper(60, 392, 470, 204, 3);
@@ -3438,7 +3619,7 @@ addEventListener('keydown', e => {
       else menuStage = menuStage === 'humans' ? 'count' : 'home';
       netMsg = ''; return;
     }
-    if (menuStage === 'home') { if (n === 1) { const cp = campProgress(); campSel = Math.min(cp.unlocked, MISSIONS.length) - 1; menuStage = 'campaign'; } else if (n === 2) menuStage = 'count'; else if (n === 3) menuStage = 'hostcount'; else if (n === 4) { codeInput = ''; netMsg = ''; menuStage = 'join'; } }
+    if (menuStage === 'home') { if (n === 1) { const cp = campProgress(); campSel = Math.min(cp.unlocked, MISSIONS.length) - 1; menuStage = 'campaign'; } else if (n === 2) menuStage = 'count'; else if (n === 3) menuStage = 'hostcount'; else if (n === 4) { codeInput = ''; netMsg = ''; menuStage = 'join'; } else if (n === 5 || k === 's') menuStage = 'store'; }
     else if (menuStage === 'campaign') {   // the mission board
       if (k === 'arrowup' || k === 'arrowdown') { campSel = clamp(campSel + (k === 'arrowdown' ? 1 : -1), 0, MISSIONS.length - 1); sfx.click(); }
       else if (k === 'enter' && campSel < campProgress().unlocked) startMission(campSel);
