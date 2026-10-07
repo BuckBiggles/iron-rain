@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-07.3';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-07.5';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -137,7 +137,12 @@ let pending = [], hit = [false, false, false, false];
 let wind = 0, turn = 0, state = 'aim', wins = [0, 0, 0, 0], winner = -1;
 let theme = THEMES[0], bgCanvas, texCanvas, vigCanvas, clouds = [], stars = [], streaks = [], menuTanks = [];
 let numPlayers = 2, numHumans = 1, menuStage = 'home';
-let mode = 'menu', paused = false, assist = true, muted = false;
+let mode = 'menu', paused = false, muted = false, pauseMenu = false, quitArmed = -999;
+// player settings, remembered in this browser (set from the pause menu)
+const settings = (() => { const d = {sound: true, music: true, volume: .8, shake: true, grain: true}; try { return Object.assign(d, JSON.parse(localStorage.getItem('ironrain.settings') || '{}')); } catch (e) { return d; } })();
+function muteAll() { const off = !muted || settings.music; muted = off; settings.music = !off; saveSettings(); }   // M: everything off, or everything back on
+function saveSettings() { settings.sound = !muted; try { localStorage.setItem('ironrain.settings', JSON.stringify(settings)); } catch (e) {} if (AC && AC.master) AC.master.gain.value = settings.volume; }
+muted = !settings.sound;
 const TURN_SECONDS = 45, QTE_FRAMES = 180;   // 3-second combo after a hit: W, A, S, D in a random order
 let qte = null;
 const shuffled = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
@@ -151,7 +156,7 @@ const keys = {}, mouse = {x: -1, y: -1};
 // ====================================================== audio (tiny synth)
 let AC = null;
 function audio() {
-  if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+  if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); AC.master = AC.createGain(); AC.master.gain.value = settings.volume; AC.master.connect(AC.destination); } catch (e) {} }   // everything plays through a master volume
   if (AC && AC.state === 'suspended') AC.resume();
   return AC;
 }
@@ -160,7 +165,7 @@ function tone(f0, f1, dur, type = 'sine', vol = .15, delay = 0) {
   const t = a.currentTime + delay, o = a.createOscillator(), g = a.createGain();
   o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
   g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
-  o.connect(g).connect(a.destination); o.start(t); o.stop(t + dur + .02);
+  o.connect(g).connect(a.master); o.start(t); o.stop(t + dur + .02);
 }
 function noise(dur, vol, f0, f1) {
   const a = audio(); if (!a || muted) return;
@@ -169,7 +174,7 @@ function noise(dur, vol, f0, f1) {
   const s = a.createBufferSource(), fl = a.createBiquadFilter(), g = a.createGain(), t = a.currentTime;
   s.buffer = buf; fl.type = 'lowpass'; fl.frequency.setValueAtTime(f0, t); fl.frequency.exponentialRampToValueAtTime(f1, t + dur);
   g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
-  s.connect(fl).connect(g).connect(a.destination); s.start(t);
+  s.connect(fl).connect(g).connect(a.master); s.start(t);
 }
 const sfx = {
   fire:   () => { noise(.25, .3, 2500, 300); tone(160, 45, .25, 'triangle', .25); },
@@ -185,6 +190,45 @@ const sfx = {
   status: () => { tone(300, 1200, .18, 'triangle', .1); tone(1200, 300, .25, 'sine', .08, .1); },
   thunder: () => { noise(2.4, .35, 500, 40); tone(55, 28, 2.2, 'sine', .22); },
 };
+// ---- music: a quiet, procedurally played military march (snare + low brass bass), scheduled a little ahead of time
+// on the audio clock so it stays steady. Fuller on the menus, softer in battle. Its own on/off; the master volume applies.
+const MUSIC = {next: 0, step: 0, gain: null, noiseBuf: null};
+const MARCH_BASS = [38, 0, 0, 0, 45, 0, 0, 0, 41, 0, 0, 0, 45, 0, 43, 0, 38, 0, 0, 0, 45, 0, 0, 0, 46, 0, 45, 0, 43, 0, 41, 0];   // D minor, MIDI notes
+const MARCH_SNARE = [3, 0, 1, 1, 2, 0, 1, 0, 3, 0, 1, 1, 2, 1, 1, 1, 3, 0, 1, 1, 2, 0, 1, 0, 3, 1, 1, 1, 2, 2, 2, 2];          // 3 accent, 2 hit, 1 ghost
+const midiHz = n => 440 * Math.pow(2, (n - 69) / 12);
+function musicTick() {
+  const a = AC; if (!a || !a.master || a.state !== 'running') return;
+  if (!MUSIC.gain) { MUSIC.gain = a.createGain(); MUSIC.gain.gain.value = 0; MUSIC.gain.connect(a.master); MUSIC.next = a.currentTime + .1; }
+  const target = !settings.music ? 0 : mode === 'play' ? .22 : .42;   // softer under the battle
+  MUSIC.gain.gain.setTargetAtTime(target, a.currentTime, .4);
+  if (!settings.music && MUSIC.gain.gain.value < .005) { MUSIC.next = a.currentTime + .1; return; }   // fully faded: don't schedule
+  const stepDur = 60 / 104 / 4;   // sixteenth notes at 104 bpm, a brisk march
+  if (MUSIC.next < a.currentTime - .5) MUSIC.next = a.currentTime + .05;   // tab was asleep: don't play a backlog
+  while (MUSIC.next < a.currentTime + .25) { musicStep(a, MUSIC.step % 32, MUSIC.next); MUSIC.next += stepDur; MUSIC.step++; }
+}
+function musicStep(a, s, t) {
+  const sn = MARCH_SNARE[s];
+  if (sn) {   // snare: a short burst of filtered noise
+    if (!MUSIC.noiseBuf) { const n = a.sampleRate * .2 | 0; MUSIC.noiseBuf = a.createBuffer(1, n, a.sampleRate); const d = MUSIC.noiseBuf.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1; }
+    const src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain(), v = [0, .05, .14, .24][sn];
+    src.buffer = MUSIC.noiseBuf; f.type = 'bandpass'; f.frequency.value = 2400; f.Q.value = .8;
+    g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(.001, t + .09);
+    src.connect(f).connect(g).connect(MUSIC.gain); src.start(t); src.stop(t + .12);
+  }
+  if (s % 8 === 0) {   // bass drum on the beat
+    const o = a.createOscillator(), g = a.createGain();
+    o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(42, t + .14);
+    g.gain.setValueAtTime(.32, t); g.gain.exponentialRampToValueAtTime(.001, t + .22);
+    o.connect(g).connect(MUSIC.gain); o.start(t); o.stop(t + .25);
+  }
+  const note = MARCH_BASS[s];
+  if (note) {   // low brass: a filtered sawtooth with a soft attack
+    const o = a.createOscillator(), f = a.createBiquadFilter(), g = a.createGain(), len = 60 / 104 * .9;
+    o.type = 'sawtooth'; o.frequency.value = midiHz(note); f.type = 'lowpass'; f.frequency.value = 520; f.Q.value = 2;
+    g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.12, t + .04); g.gain.exponentialRampToValueAtTime(.0001, t + len);
+    o.connect(f).connect(g).connect(MUSIC.gain); o.start(t); o.stop(t + len + .02);
+  }
+}
 
 // ====================================================== helpers (drawing)
 // every "rounded" box in the UI is drawn with chamfered (cut) corners instead — hard-edged, steel-plate look
@@ -517,7 +561,7 @@ function droneSfx(dur) {   // the low, throbbing drone of a bomber stream passin
   f.type = 'lowpass'; f.frequency.value = 260;
   g.gain.setValueAtTime(.0001, t); g.gain.exponentialRampToValueAtTime(.05, t + dur * .4); g.gain.exponentialRampToValueAtTime(.0001, t + dur);
   for (const hz of [62, 64.5, 93]) { const o = a.createOscillator(); o.type = 'sawtooth'; o.frequency.value = hz; o.connect(f); o.start(t); o.stop(t + dur + .1); }
-  f.connect(g).connect(a.destination);
+  f.connect(g).connect(a.master);
 }
 function updateSky() {
   const fighters = planes.filter(p => p.kind === 'fighter' && !p.down);
@@ -2273,7 +2317,7 @@ function drawAimHelpers(t) {
   ctx.setLineDash([6, 6]); ctx.lineDashOffset = -T * .5; ctx.strokeStyle = t.color; ctx.lineWidth = 2; ctx.globalAlpha = .8;
   ctx.beginPath(); ctx.moveTo(p.x + Math.cos(a) * 30, p.y - Math.sin(a) * 30); ctx.lineTo(p.x + Math.cos(a) * len, p.y - Math.sin(a) * len); ctx.stroke();
   ctx.restore();
-  if (assist && !t.ai && isMine(t)) {
+  if (!t.ai && isMine(t)) {   // the trajectory line, always shown for your own tank
     const pts = previewPoints(t);
     pts.forEach(([x, y], i) => {
       ctx.globalAlpha = 1 - i / pts.length * .85; ctx.fillStyle = '#ffe08a'; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.lineWidth = 1.5;
@@ -2424,7 +2468,7 @@ function drawBeams() {
 
 function drawWorld(actors) {
   ctx.save();
-  if (shake) ctx.translate(rnd(-shake, shake), rnd(-shake, shake));
+  if (shake && settings.shake) ctx.translate(rnd(-shake, shake), rnd(-shake, shake));
   drawBackdrop(); if (!theme.rain && !theme.dust) drawWindStreaks(); drawTerrain(); drawAliens();
   for (const t of actors) if (t.hp <= 0) drawTank(t, false);
   for (const t of actors) if (t.hp > 0) drawTank(t, mode === 'play' && (state === 'aim' || state === 'move') && t.i === turn);
@@ -2433,7 +2477,7 @@ function drawWorld(actors) {
   drawSaucers(); drawUfoZaps(); drawShots(); if (mode !== 'play') drawMenuShells(); drawParts(); drawGhosts(); drawBeams(); drawRainAndDust();
   ctx.restore();
   if (boltFlash > .03) { ctx.fillStyle = `rgba(215,228,255,${boltFlash * .3})`; ctx.fillRect(0, 0, WW, WH); }   // lightning lights up the field
-  drawGrain();
+  if (settings.grain) drawGrain();
   if (!vigCanvas) {   // darkened corners + a faint olive grade, like a battlefield camera feed
     vigCanvas = document.createElement('canvas'); vigCanvas.width = WW; vigCanvas.height = WH;
     const v = vigCanvas.getContext('2d'), vg = v.createRadialGradient(WW / 2, WH / 2, WH * .42, WW / 2, WH / 2, WW * .66);
@@ -2616,7 +2660,7 @@ function drawInfoCard() {
   panel(x, y, w, h, 10);
   // controls (two rows of key chips)
   const rows = [[['← →', 'Aim'], ['↑ ↓', 'Power'], ['Shift', 'Fine'], ['A D', 'Drive'], ['1-4', 'Weapon'], ['Space', 'Fire']],
-                [['↑ ← ↓ →', 'Auth code'], ['Q', 'Supply'], ['E', 'End turn'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
+                [['↑ ← ↓ →', 'Auth code'], ['Q', 'Supply'], ['E', 'End turn'], ['M', muted && !settings.music ? 'Sound off' : 'Mute all'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
   rows.forEach((row, r) => {
     let cx = x + 12; const cy = y + 14 + r * 20;
     for (const [k, d] of row) {
@@ -2844,9 +2888,9 @@ function drawOver() {
       + (cr.newUnlock ? '    ·    NEW MISSION UNLOCKED' : '') + (cr.last ? '    ·    CAMPAIGN COMPLETE!' : '') : `Operation ${m.name} failed. Regroup and try again.`;
     text(notes, W / 2, py + ph - 18, 12, cr.won ? '#e8d27a' : '#fca5a5', 'center', '800');
   }
-  const hint = cr ? (cr.won ? 'ENTER  mission board     ·     R  replay' : 'ENTER  retry     ·     ESC  mission board')
-    : net && net.role === 'client' ? 'Waiting for the host to start the next round…     ·     ESC  leave'
-    : `ENTER  next round     ·     ESC  ${net ? 'close room' : 'main menu'}`;
+  const hint = cr ? (cr.won ? 'ENTER  mission board     ·     R  replay' : 'ENTER  retry     ·     ESC  menu')
+    : net && net.role === 'client' ? 'Waiting for the host to start the next round…     ·     ESC  menu'
+    : 'ENTER  next round     ·     ESC  menu';
   text(hint, W / 2, py + ph + 30, 16, '#fff', 'center', '700', 'rgba(0,0,0,.6)');
 }
 
@@ -3688,7 +3732,7 @@ function drawMenu() {
   text('FIELD MANUAL  FM 17-IR', 84, 420, 16, PAPER_INK, 'left', '900');
   ttext('OPERATION OF THE MEDIUM TANK', 84, 438, 10, 'rgba(43,35,22,.7)');
   ctx.fillStyle = 'rgba(43,35,22,.5)'; ctx.fillRect(84, 448, 420, 1.2);
-  [['←  →', 'aim the barrel'], ['↑  ↓', 'set power (Shift = fine)'], ['A  D', 'drive (limited fuel)'], ['1 – 4', 'pick weapon'], ['SPACE', 'FIRE!'], ['T / M / P', 'aim assist / sound / pause']]
+  [['←  →', 'aim the barrel'], ['↑  ↓', 'set power (Shift = fine)'], ['A  D', 'drive (limited fuel)'], ['1 – 4', 'pick weapon'], ['SPACE', 'FIRE!'], ['M / P', 'sound / pause']]
     .forEach(([k, d], i) => { const y = 466 + i * 21; ctx.strokeStyle = 'rgba(43,35,22,.55)'; ctx.lineWidth = 1.2; rr(84, y - 9, 86, 18, 4); ctx.stroke();
                               text(k, 127, y + 1, 12, PAPER_INK, 'center', '900'); ttext(d, 184, y + 1, 12.5); });
   stamp('RESTRICTED', 452, 560, 14, -.2);
@@ -3723,16 +3767,60 @@ function draw() {
     if (state === 'quick' && qte) drawQuick();
     if (state === 'wheel' && wheel) drawWheel();
     if (state === 'over') drawOver();
-    if (paused) {
+    if (paused && !pauseMenu) {
       ctx.fillStyle = 'rgba(8,10,5,.62)'; ctx.fillRect(0, 0, W, H);
       text('PAUSED', W / 2, H / 2 - 10, 60, '#fff', 'center', '900', 'rgba(0,0,0,.6)');
       text('press P to resume', W / 2, H / 2 + 40, 16, 'rgba(255,255,255,.7)', 'center', '700');
     }
     drawUIParts();
     cv.style.cursor = 'default';
+    if (pauseMenu) { uiButtons = []; drawPauseMenu(); }   // Esc menu: on top of everything, and the only thing clickable
   }
   if (infoPopup) drawInfoPopup();
   if (infoButtons.some(b => inRect(mouse, b)) || infoPopup) cv.style.cursor = 'pointer';
+}
+
+// ---- the Esc menu during a game: resume, settings, leave. Offline it pauses the game; online the battle carries on.
+function togglePauseMenu() { pauseMenu = !pauseMenu; quitArmed = -999; if (!net) paused = pauseMenu; sfx.click(); }
+function quitGame() {
+  pauseMenu = false; paused = false;
+  if (net) leaveRoom(); else if (campaign) leaveMission(false); else { mode = 'menu'; menuStage = 'home'; loadout = null; initMenuScene(); }
+}
+function drawPauseMenu() {
+  const pw = 440, ph = 446, px = W / 2 - pw / 2, py = H / 2 - ph / 2 + 4;
+  ctx.fillStyle = 'rgba(6,8,4,.72)'; ctx.fillRect(0, 0, W, UH);
+  halo(px, py, pw, ph, 18, '#d4a417'); panel(px, py, pw, ph, 18, '#d4a417', 2.4);
+  text(net ? 'MENU' : 'PAUSED', W / 2, py + 38, 32, INK, 'center', '900', 'rgba(0,0,0,.6)');
+  text(net ? 'online: the battle carries on while you\'re in here' : 'the game is paused', W / 2, py + 64, 11, INK_DIM, 'center', '700');
+  let any = false;
+  const btn = (x, y, w, h, label, color, tap, filled) => { if (smallBtn(x, y, w, h, label, color, () => {}, filled)) any = true; uiButtons.push({x, y, w, h, tap}); };
+  btn(px + 40, py + 80, pw - 80, 42, '▶  RESUME   (Esc)', '#9cc255', () => togglePauseMenu(), true);
+  // settings
+  text('SETTINGS', px + 40, py + 146, 11, '#d4a417', 'left', '900');
+  ctx.fillStyle = 'rgba(214,204,150,.25)'; ctx.fillRect(px + 40, py + 156, pw - 80, 1);
+  const rows = [
+    ['MUSIC', () => settings.music ? 'ON' : 'OFF', () => { settings.music = !settings.music; saveSettings(); }, () => settings.music],
+    ['SOUND EFFECTS', () => muted ? 'OFF' : 'ON', () => { muted = !muted; saveSettings(); }, () => !muted],
+    ['SCREEN SHAKE', () => settings.shake ? 'ON' : 'OFF', () => { settings.shake = !settings.shake; saveSettings(); }, () => settings.shake],
+    ['FILM GRAIN', () => settings.grain ? 'ON' : 'OFF', () => { settings.grain = !settings.grain; saveSettings(); }, () => settings.grain],
+  ];
+  let y = py + 176;
+  text('VOLUME', px + 46, y + 13, 14, INK, 'left', '800');
+  const vol = v => { settings.volume = clamp(Math.round(v * 10) / 10, 0, 1); saveSettings(); tone(660, 660, .08, 'square', .08); };
+  btn(px + pw - 196, y, 34, 26, '◀', '#d4a417', () => vol(settings.volume - .1), false);
+  for (let k = 0; k < 10; k++) { ctx.fillStyle = k < Math.round(settings.volume * 10) ? '#d4a417' : 'rgba(255,255,255,.12)'; ctx.fillRect(px + pw - 156 + k * 8.6, y + 6, 6.6, 14); }
+  btn(px + pw - 74, y, 34, 26, '▶', '#d4a417', () => vol(settings.volume + .1), false);
+  y += 36;
+  for (const [label, val, flip, on] of rows) {
+    text(label, px + 46, y + 13, 14, INK, 'left', '800');
+    btn(px + pw - 136, y, 96, 26, val(), on() ? '#9cc255' : '#c0583d', () => { flip(); sfx.click(); }, on());
+    y += 36;
+  }
+  // leave (two clicks, so it can't happen by accident)
+  const armed = T - quitArmed < 180;
+  const quitLabel = armed ? 'CLICK AGAIN TO CONFIRM' : net ? (net.role === 'host' ? '✖  CLOSE ROOM' : '✖  LEAVE GAME') : campaign ? '✖  ABANDON MISSION' : '✖  QUIT TO MENU';
+  btn(px + 40, py + ph - 62, pw - 80, 40, quitLabel, '#c0583d', () => { if (T - quitArmed < 180) quitGame(); else { quitArmed = T; sfx.click(); } }, armed);
+  cv.style.cursor = any ? 'pointer' : 'default';
 }
 
 function drawUIParts() {   // confetti, in interface space
@@ -3781,7 +3869,7 @@ addEventListener('keydown', e => {
     else if (e.key.length === 1 && /[a-z0-9 .!\-]/i.test(e.key) && nameBuf.length < 12 && !e.ctrlKey && !e.metaKey) nameBuf += e.key.toUpperCase();
     return;
   }
-  if (k === 'm') { muted = !muted; return; }
+  if (k === 'm') { muteAll(); return; }
   if (mode === 'armory') {
     if (k === 'escape') { if (net) leaveRoom(); else if (campaign) leaveMission(false); else { mode = 'menu'; menuStage = 'humans'; loadout = null; } return; }
     if (campaign && k.length === 1 && 'gnct'.includes(k)) return;   // a mission fixes the map, sides and CPUs
@@ -3825,13 +3913,13 @@ addEventListener('keydown', e => {
     else if (menuStage === 'lobby' && k === 'enter') startOnline();
     return;
   }
-  if (k === 'escape') { if (net) leaveRoom(); else if (campaign) leaveMission(false); else { mode = 'menu'; menuStage = 'home'; loadout = null; initMenuScene(); } return; }
+  if (k === 'escape') { togglePauseMenu(); return; }   // a menu with settings, not an instant quit
+  if (pauseMenu) { if (k === 'enter') togglePauseMenu(); return; }   // the game's own keys are off while it's open
   if (campaign && state === 'over') {   // won: ENTER back to the board (next mission picked) · lost: ENTER retries · R replays either way
     if (k === 'enter') { if (campResult && campResult.won) leaveMission(true); else startRound(); return; }
     if (k === 'r') { startRound(); return; }
   }
   if (k === 'p' && state !== 'over' && !net) { paused = !paused; return; }
-  if (k === 't') { assist = !assist; return; }
   if (state === 'over' && k === 'enter' && (!net || net.role === 'host')) { startRound(); return; }
   if (paused || !tanks.length) return;
   const t = tanks[turn];
@@ -3862,6 +3950,7 @@ const inRect = (p, b) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= 
 const activePtr = new Map();   // pointer currently dragging a control (power bar / angle dial)
 cv.addEventListener('pointerdown', e => {
   audio(); Object.assign(mouse, toCanvas(e));
+  if (pauseMenu && mode === 'play') { for (const b of uiButtons) if (inRect(mouse, b)) { if (b.tap) b.tap(); break; } return; }   // only the menu while it's open
   if (infoPopup) { infoPopup = null; return; }                                   // any click closes the ammo popup
   for (const b of infoButtons) if (inRect(mouse, b)) { b.action(); return; }   // ammo chips on the info card
   if (mode === 'menu' || mode === 'armory') {
@@ -3900,7 +3989,7 @@ initMenuScene();
 let lastTick = performance.now(), acc = 0;
 function tick() {
   const now = performance.now(); acc += Math.min(250, now - lastTick); lastTick = now;
-  netTick();
+  netTick(); musicTick();
   for (let n = 0; acc >= 1000 / 60 && n < 8; n++, acc -= 1000 / 60) update();
 }
 try {

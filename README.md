@@ -36,6 +36,7 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
   and four status shells that last through the victim's next turn: **Incendiary** (burning: 15 damage when it starts),
   **Cryo** (frozen: can't aim or drive), **Acid** (corroded: takes 50% more damage), **EMP** (shorted: half power)
 - **Move after you shoot:** once your shot lands, drive with whatever fuel is left, or press ENTER to end your turn
+- **Music:** a procedural military march, fuller on the menus and softer in battle; Esc menu toggles music and sound effects separately
 - **After-action report** at the end of each round: damage, accuracy and kills for every unit
 
 ## Online play
@@ -62,6 +63,6 @@ The control panel and a controls + ammo card sit in a strip below the battlefiel
 | Space | Fire |
 | Enter / E | After your shot: end your turn (or just drive until the fuel runs out) |
 | ↑ ← ↓ → or W A S D | After a hit: enter the 4 arrows shown, in order, within 3 s |
-| T / M / P | Aim assist / sound / pause (offline only) |
+| M / P | Mute all (music + sound effects) / pause (offline only) |
 | Armory | ←/→ tank, ↑/↓ colour, Enter ready, Tab next player (hot-seat), N map, C CPU difficulty, G mode — or click |
-| Esc | Menu / leave room |
+| Esc | In a game: menu with resume, settings (music, sound effects, volume, screen shake, film grain) and leave |
