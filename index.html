@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-07.5';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-07.6';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -876,11 +876,15 @@ function driveTank(t, dir) {   // shared by players and CPUs: crawl along the gr
     if (T % 4 === 0) addP({type: 'smoke', x: t.x - dir * 14, y: t.y + 3, vx: -dir * .4, vy: -.3, g: -.005, life: 25, size: 3, drag: .95});
   }
 }
+// The barrel angle is set against the hull, not the horizon: 90 is square to the hull, 0 and 180 lie along it.
+// So a tank on a slope tilts its whole arc with it and can aim below level. aimDeg is the real launch angle.
+const tiltDeg = t => (t.tilt || 0) * 180 / Math.PI;
+const aimDeg = t => t.angle - tiltDeg(t);
 function pivot(t) {   // world position of the turret pivot, accounting for hull tilt
   return {x: t.x + 22 * Math.sin(t.tilt), y: t.y + 4 - 22 * Math.cos(t.tilt)};
 }
 function muzzle(t) {
-  const p = pivot(t), a = t.angle * Math.PI / 180;
+  const p = pivot(t), a = aimDeg(t) * Math.PI / 180;
   const L = TANKS[t.model || 0].gun.len + 1;
   return {x: p.x + Math.cos(a) * L, y: p.y - Math.sin(a) * L};
 }
@@ -918,7 +922,7 @@ function tankDist(t, x, y) {   // distance from a world point to the nearest pai
   d = Math.min(d, Math.max(0, (Math.hypot((lx + 3.5) / 3.4, (ly - topY + .4) / 1.4) - 1) * 1.4));                 // hatch
   d = Math.min(d, Math.hypot(Math.max(0, 2.5 - lx, lx - 7), Math.max(0, topY - 3.5 - ly, ly - topY)));              // sight block
   if (t.hp > 0) {   // the barrel (both of them on a twin-gun), in world space from the turret pivot, with its thicker sleeve and muzzle brake
-    const p = pivot(t), a = t.angle * Math.PI / 180, c = Math.cos(a), s = -Math.sin(a), g = M.gun, L = g.len;
+    const p = pivot(t), a = aimDeg(t) * Math.PI / 180, c = Math.cos(a), s = -Math.sin(a), g = M.gun, L = g.len;
     const parts = [[0, L, g.w / 2]];
     if (g.sleeve) parts.push([5, 5 + L * .52, g.w * .82]);
     if (g.brake) parts.push([L - 5, L + .5, g.w * .82]);
@@ -1014,7 +1018,7 @@ function fire() {
   hit = [false, false, false, false];
   const m = muzzle(t), v = shotSpeed(shotPower(t));
   for (let k = 0; k < w.shots; k++) {
-    const a = (t.angle + (k - (w.shots - 1) / 2) * (w.spread || 7)) * Math.PI / 180;   // Triple fans out 7°, Lucky 7 is tight
+    const a = (aimDeg(t) + (k - (w.shots - 1) / 2) * (w.spread || 7)) * Math.PI / 180;   // Triple fans out 7°, Lucky 7 is tight
     shots.push({id: ++shotId, x: m.x, y: m.y, vx: Math.cos(a) * v, vy: -Math.sin(a) * v, w, owner: turn, trail: [],
                 bounces: w.kind === 'bounce' ? 3 : 0, split: w.kind === 'mirv', bore: w.bore || 0});
   }
@@ -1460,7 +1464,7 @@ function simulate(sx, sy, angle, power, windv, self) {   // where would a shot l
   return {x, y};
 }
 function previewPoints(t) {
-  const m = muzzle(t), a = t.angle * Math.PI / 180, v = shotSpeed(shotPower(t)), pts = [];
+  const m = muzzle(t), a = aimDeg(t) * Math.PI / 180, v = shotSpeed(shotPower(t)), pts = [];
   let x = m.x, y = m.y, vx = Math.cos(a) * v, vy = -Math.sin(a) * v;
   for (let i = 0; i < 21; i++) {   // a short stub of the arc, just enough to show the launch direction
     vx += wind * WIND_SCALE; vy += G; x += vx; y += vy;
@@ -1476,7 +1480,9 @@ function aiThink(t) {
   if (!targets.length) return fire();
   let best = null;
   const m = muzzle(t), mult = powerMult(t);   // a status-afflicted CPU knows its shot is halved and compensates
-  const frozen = hasStatus(t, 'frozen'), aLo = frozen ? Math.round(t.angle) : 20, aHi = frozen ? Math.round(t.angle) : 160;   // a frozen barrel can't move
+  const frozen = hasStatus(t, 'frozen'), td = tiltDeg(t),
+        aLo = frozen ? Math.round(aimDeg(t)) : Math.ceil(Math.max(-td, 20 - Math.abs(td))),          // a frozen barrel can't move; on a slope the
+        aHi = frozen ? Math.round(aimDeg(t)) : Math.floor(Math.min(180 - td, 160 + Math.abs(td)));  // hull lets it reach below level on the downhill side
   for (let a = aLo; a <= aHi; a += 2) for (let p = 20; p <= 100; p += 2) {
     const r = simulate(m.x, m.y, a, p * mult, wind, t.i);
     if (r.out) continue;
@@ -1494,7 +1500,7 @@ function aiThink(t) {
   });
   const overCave = targets.some(o => caves.some(c => !c.falling && Math.abs(o.x - c.x) < c.w));
   if (cpuL(t).drill && t.ammo[3] > 0 && (best.d > 30 || behindCover || overCave)) {
-    for (let a = frozen ? aLo : 4; a <= (frozen ? aHi : 176); a += 3) for (let p = 20; p <= 100; p += 3) {
+    for (let a = frozen ? aLo : Math.ceil(Math.max(4, -td)); a <= (frozen ? aHi : Math.min(176, 180 - td)); a += 3) for (let p = 20; p <= 100; p += 3) {
       const r = simulateDrill(m.x, m.y, a, p * mult, wind, t.i);
       if (!r || allies.some(o => Math.abs(r.x - o.x) < 70)) continue;
       let d = Math.min(...targets.map(o => Math.hypot(r.x - o.x, r.y - o.y))), cave = false;
@@ -1508,7 +1514,7 @@ function aiThink(t) {
   if (useDrill) best = drill;
   const err = cpuL(t).err * (useDrill ? .6 : 1);   // difficulty sets the aim error; a drill line is less forgiving, so it's aimed more carefully
   aiPlan = {a: best.a + rnd(-err, err), p: Math.round(clamp(best.p + rnd(-err, err), 20, 100)), weapon: useDrill ? 3 : 0};
-  if (frozen) aiPlan.a = t.angle;
+  aiPlan.a = frozen ? t.angle : clamp(aiPlan.a + tiltDeg(t), 0, 180);   // the search is in launch angles; the barrel is set against the hull
   if (!useDrill) {
     if (t.ammo[1] > 0 && best.d < 40 && Math.random() < .6) aiPlan.weapon = 1;
     else if (t.ammo[2] > 0 && Math.random() < .3) aiPlan.weapon = 2;
@@ -1590,10 +1596,10 @@ function menuBattle() {
     const t = pick(menuTanks), o = pick(menuTanks.filter(q => q !== t));
     const tf = rnd(75, 105), m = muzzle(t), dx = o.x + rnd(-40, 40) - m.x, dy = o.y - m.y;
     const vx = dx / tf, vy = (dy - .5 * G * tf * tf) / tf;
-    t.aim = clamp(Math.atan2(-vy, vx) * 180 / Math.PI, 5, 175); t.fireIn = 22; t.shot = {vx, vy};
+    t.aim = clamp(Math.atan2(-vy, vx) * 180 / Math.PI + tiltDeg(t), 5, 175); t.fireIn = 22; t.shot = {vx, vy};
   }
   for (const t of menuTanks) if (t.fireIn && --t.fireIn === 0) {   // fire once the barrel has swung onto target
-    const m = muzzle(t), a = t.angle * Math.PI / 180, sp = Math.hypot(t.shot.vx, t.shot.vy);
+    const m = muzzle(t), a = aimDeg(t) * Math.PI / 180, sp = Math.hypot(t.shot.vx, t.shot.vy);
     menuShells.push({x: m.x, y: m.y, vx: Math.cos(a) * sp, vy: -Math.sin(a) * sp, trail: []});
     t.recoil = 8;
     burst(m.x, m.y, 8, {type: 'fire', s0: .5, s1: 3, l0: 8, l1: 16, z0: 3, z1: 6, drag: .9});
@@ -2248,7 +2254,7 @@ function drawTank(t, active, preview) {
   // main gun (pivot is (0, -22) in tank space)
   ctx.save();
   ctx.translate(0, -22); ctx.rotate(-t.tilt);
-  ctx.rotate(dead ? Math.PI * .2 : -t.angle * Math.PI / 180);
+  ctx.rotate(dead ? Math.PI * .2 : -aimDeg(t) * Math.PI / 180);
   const r = t.recoil, gn = M.gun, L = gn.len;
   for (const off of gn.twin ? [-2.6, 2.6] : [0]) {
     const bg = ctx.createLinearGradient(0, off - gn.w / 2, 0, off + gn.w / 2);   // round steel tube: lit on top, dark underneath
@@ -2305,7 +2311,7 @@ function drawTank(t, active, preview) {
 }
 
 function drawAimHelpers(t) {
-  const p = pivot(t), a = t.angle * Math.PI / 180;
+  const p = pivot(t), a = aimDeg(t) * Math.PI / 180;
   ctx.save();
   ctx.strokeStyle = 'rgba(255,255,255,.28)'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.arc(p.x, p.y, 46, Math.PI, TAU); ctx.stroke();
@@ -2534,20 +2540,30 @@ function drawShotClock() {   // online: seconds left for a human's shot
 function drawControlPanel() {
   const t = tanks[turn], x = 90, w = W - 180, y0 = H + 6, h = 84, col = t.color;
   halo(x, y0, w, h, 16, col); panel(x, y0, w, h, 16, col, 2);
-  // angle gauge
-  const gx = 152, gy = y0 + 70, gr = 52;
-  ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(255,255,255,.1)'; ctx.beginPath(); ctx.arc(gx, gy, gr - 6, Math.PI, TAU); ctx.stroke();
-  const a = t.angle * Math.PI / 180;
+  // an enemy's (or a CPU's) angle and power stay secret: on their turn the readouts are blanked out
+  const secret = !isMine(t) || t.ai;
+  // angle gauge: the dial tilts with the hull, since the angle is set against the hull (90 = square to it)
+  const gx = 152, gy = y0 + 70, gr = 52, tl = t.tilt || 0;
+  ctx.save(); rr(x, y0, w, h, 16); ctx.clip(); ctx.translate(gx, gy); ctx.rotate(tl);
+  ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(255,255,255,.1)'; ctx.beginPath(); ctx.arc(0, 0, gr - 6, Math.PI, TAU); ctx.stroke();
   ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,.35)';
-  for (let d = 0; d <= 180; d += 30) { const c = Math.cos(d * Math.PI / 180), s = Math.sin(d * Math.PI / 180); ctx.beginPath(); ctx.moveTo(gx + c * (gr - 2), gy - s * (gr - 2)); ctx.lineTo(gx + c * (gr + 3), gy - s * (gr + 3)); ctx.stroke(); }
-  ctx.save(); glow(col, 8); ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx + Math.cos(a) * (gr - 4), gy - Math.sin(a) * (gr - 4)); ctx.stroke(); ctx.restore();
+  for (let d = 0; d <= 180; d += 30) { const c = Math.cos(d * Math.PI / 180), s = Math.sin(d * Math.PI / 180); ctx.beginPath(); ctx.moveTo(c * (gr - 2), -s * (gr - 2)); ctx.lineTo(c * (gr + 3), -s * (gr + 3)); ctx.stroke(); }
+  if (Math.abs(tl) > .02) { ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(-gr, 0); ctx.lineTo(gr, 0); ctx.stroke(); ctx.setLineDash([]); }   // the hull line
+  if (!secret) {
+    const a = t.angle * Math.PI / 180;
+    ctx.save(); glow(col, 8); ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * (gr - 4), -Math.sin(a) * (gr - 4)); ctx.stroke(); ctx.restore();
+  }
+  ctx.restore();
   ctx.fillStyle = col; ctx.beginPath(); ctx.arc(gx, gy, 4, 0, TAU); ctx.fill();
-  text(Math.round(t.angle) + '°', gx, gy - 20, 18, INK, 'center', '800');
+  text(secret ? '??°' : Math.round(t.angle) + '°', gx, gy - 20, 18, secret ? INK_DIM : INK, 'center', '800');
   text('ANGLE', gx, y0 + 12, 10, 'rgba(255,255,255,.55)', 'center', '800');
   // power
-  const px = 240, pw = 284, st = t.status, eff = shotPower(t), dial = Math.round(t.power);
-  if (st && st.id === 'shorted') {   // EMP: this shot fires at half power — show the dial value AND what actually comes out
+  const px = 240, pw = 284, st = t.status, eff = secret ? 0 : shotPower(t), dial = Math.round(t.power);
+  if (secret) {
+    text(st ? `POWER — ${st.icon} ${st.name}: ${st.short}` : 'POWER', px, y0 + 16, 11, st ? st.color : INK_DIM, 'left', st ? '900' : '800');
+    text('??', px + pw, y0 + 16, 18, INK_DIM, 'right', '800');
+  } else if (st && st.id === 'shorted') {   // EMP: this shot fires at half power — show the dial value AND what actually comes out
     text(`POWER ×½ — ${st.icon} ${st.name}`, px, y0 + 16, 11, st.color, 'left', '900');
     text(`${dial} → ${Math.round(eff)}`, px + pw, y0 + 16, 18, st.color, 'right', '800');
   } else {
@@ -2559,7 +2575,7 @@ function drawControlPanel() {
   for (let i = 0; i < segs; i++) {
     const f = i / (segs - 1), c = f < .5 ? '#9cc255' : f < .8 ? '#e0b23c' : '#d6492f', sx0 = px + i * (sw + 2);
     rr(sx0, y0 + 28, sw, 20, 2.5); ctx.fillStyle = 'rgba(255,255,255,.09)'; ctx.fill();
-    const fill = clamp((eff - i * 5) / 5, 0, 1), lost = st ? clamp((dial - i * 5) / 5, 0, 1) : 0;
+    const fill = clamp((eff - i * 5) / 5, 0, 1), lost = st && !secret ? clamp((dial - i * 5) / 5, 0, 1) : 0;
     if (lost > fill) { ctx.fillStyle = st.color + '44'; ctx.fillRect(sx0, y0 + 28, sw * lost, 20); }   // power lost to a status, shown faint
     if (fill > 0) { ctx.save(); rr(sx0, y0 + 28, sw, 20, 2.5); ctx.clip(); ctx.fillStyle = c; ctx.fillRect(sx0, y0 + 28, sw * fill, 20); ctx.restore(); }
   }
@@ -2612,8 +2628,9 @@ function drawControlPanel() {
   // mouse shortcuts (only for the tank this machine controls, while aiming)
   if (ready && !moving) {
     uiButtons.push({x: gx - gr - 6, y: gy - gr - 8, w: gr * 2 + 12, h: gr + 22, drag: (mx, my) => {
-      const a = Math.atan2(gy - my, mx - gx) * 180 / Math.PI;
-      t.angle = clamp(a < 0 ? (mx < gx ? 180 : 0) : a, 0, 180);
+      let a = Math.atan2(gy - my, mx - gx) * 180 / Math.PI + tiltDeg(t);   // the dial is tilted with the hull
+      if (a < -90) a += 360;
+      t.angle = clamp(a, 0, 180);
     }});
     uiButtons.push({x: px - 6, y: y0 + 22, w: pw + 12, h: 32, drag: mx => { t.power = clamp(Math.round((mx - px) / pw * 100), 5, 100); }});
     WEAPONS.forEach((wp, i) => uiButtons.push({x: sx + i * step, y: sy, w: sw2, h: sh, tap: () => { if (t.ammo[i] > 0) { t.weapon = i; t.armed = -1; sfx.click(); } }}));
@@ -3760,6 +3777,8 @@ function draw() {
     mode === 'menu' ? drawMenu() : drawArmory();
     text(GAME_NAME + '  ·  ARMORED ARTILLERY  ·  click an ammo type below to see what it does', W / 2, H + 50, 14, INK_DIM, 'center', '800');
     drawInfoCard();
+    if (pauseMenu && mode === 'menu' && menuStage !== 'lobby') pauseMenu = false;   // the room closed under it
+    if (pauseMenu) { uiButtons = []; drawPauseMenu(); }
   } else {
     uiButtons = [];
     drawOffscreenShells();
@@ -3781,7 +3800,7 @@ function draw() {
 }
 
 // ---- the Esc menu during a game: resume, settings, leave. Offline it pauses the game; online the battle carries on.
-function togglePauseMenu() { pauseMenu = !pauseMenu; quitArmed = -999; if (!net) paused = pauseMenu; sfx.click(); }
+function togglePauseMenu() { pauseMenu = !pauseMenu; quitArmed = -999; if (!net && mode === 'play') paused = pauseMenu; sfx.click(); }
 function quitGame() {
   pauseMenu = false; paused = false;
   if (net) leaveRoom(); else if (campaign) leaveMission(false); else { mode = 'menu'; menuStage = 'home'; loadout = null; initMenuScene(); }
@@ -3790,8 +3809,8 @@ function drawPauseMenu() {
   const pw = 440, ph = 446, px = W / 2 - pw / 2, py = H / 2 - ph / 2 + 4;
   ctx.fillStyle = 'rgba(6,8,4,.72)'; ctx.fillRect(0, 0, W, UH);
   halo(px, py, pw, ph, 18, '#d4a417'); panel(px, py, pw, ph, 18, '#d4a417', 2.4);
-  text(net ? 'MENU' : 'PAUSED', W / 2, py + 38, 32, INK, 'center', '900', 'rgba(0,0,0,.6)');
-  text(net ? 'online: the battle carries on while you\'re in here' : 'the game is paused', W / 2, py + 64, 11, INK_DIM, 'center', '700');
+  text(net || mode !== 'play' ? 'MENU' : 'PAUSED', W / 2, py + 38, 32, INK, 'center', '900', 'rgba(0,0,0,.6)');
+  text(mode !== 'play' ? (net ? 'the lobby stays open while you\'re in here' : 'nothing has started yet') : net ? 'online: the battle carries on while you\'re in here' : 'the game is paused', W / 2, py + 64, 11, INK_DIM, 'center', '700');
   let any = false;
   const btn = (x, y, w, h, label, color, tap, filled) => { if (smallBtn(x, y, w, h, label, color, () => {}, filled)) any = true; uiButtons.push({x, y, w, h, tap}); };
   btn(px + 40, py + 80, pw - 80, 42, '▶  RESUME   (Esc)', '#9cc255', () => togglePauseMenu(), true);
@@ -3818,7 +3837,7 @@ function drawPauseMenu() {
   }
   // leave (two clicks, so it can't happen by accident)
   const armed = T - quitArmed < 180;
-  const quitLabel = armed ? 'CLICK AGAIN TO CONFIRM' : net ? (net.role === 'host' ? '✖  CLOSE ROOM' : '✖  LEAVE GAME') : campaign ? '✖  ABANDON MISSION' : '✖  QUIT TO MENU';
+  const quitLabel = armed ? 'CLICK AGAIN TO CONFIRM' : net ? (net.role === 'host' ? '✖  CLOSE ROOM' : '✖  LEAVE GAME') : campaign ? '✖  ABANDON MISSION' : mode !== 'play' ? '✖  BACK TO MAIN MENU' : '✖  QUIT TO MENU';
   btn(px + 40, py + ph - 62, pw - 80, 40, quitLabel, '#c0583d', () => { if (T - quitArmed < 180) quitGame(); else { quitArmed = T; sfx.click(); } }, armed);
   cv.style.cursor = any ? 'pointer' : 'default';
 }
@@ -3870,8 +3889,9 @@ addEventListener('keydown', e => {
     return;
   }
   if (k === 'm') { muteAll(); return; }
+  if (pauseMenu && mode !== 'play') { if (k === 'escape' || k === 'enter') togglePauseMenu(); return; }   // the Esc menu over the armory / lobby
   if (mode === 'armory') {
-    if (k === 'escape') { if (net) leaveRoom(); else if (campaign) leaveMission(false); else { mode = 'menu'; menuStage = 'humans'; loadout = null; } return; }
+    if (k === 'escape') { togglePauseMenu(); return; }   // a menu with settings and a two-click leave, not an instant quit
     if (campaign && k.length === 1 && 'gnct'.includes(k)) return;   // a mission fixes the map, sides and CPUs
     if (k === 'tab' && !net) {   // hot-seat: move the keyboard to the next human player's panel
       e.preventDefault();
@@ -3898,7 +3918,8 @@ addEventListener('keydown', e => {
   if (mode === 'menu') {
     const n = parseInt(e.key);
     if (k === 'escape' || k === 'backspace') {
-      if (menuStage === 'lobby' || menuStage === 'connecting') leaveRoom();
+      if (menuStage === 'lobby') { togglePauseMenu(); return; }
+      if (menuStage === 'connecting') leaveRoom();
       else menuStage = menuStage === 'humans' ? 'count' : 'home';
       netMsg = ''; return;
     }
@@ -3950,7 +3971,7 @@ const inRect = (p, b) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= 
 const activePtr = new Map();   // pointer currently dragging a control (power bar / angle dial)
 cv.addEventListener('pointerdown', e => {
   audio(); Object.assign(mouse, toCanvas(e));
-  if (pauseMenu && mode === 'play') { for (const b of uiButtons) if (inRect(mouse, b)) { if (b.tap) b.tap(); break; } return; }   // only the menu while it's open
+  if (pauseMenu) { for (const b of uiButtons) if (inRect(mouse, b)) { if (b.tap) b.tap(); break; } return; }   // only the menu while it's open
   if (infoPopup) { infoPopup = null; return; }                                   // any click closes the ammo popup
   for (const b of infoButtons) if (inRect(mouse, b)) { b.action(); return; }   // ammo chips on the info card
   if (mode === 'menu' || mode === 'armory') {

@@ -37,6 +37,7 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
   **Cryo** (frozen: can't aim or drive), **Acid** (corroded: takes 50% more damage), **EMP** (shorted: half power)
 - **Move after you shoot:** once your shot lands, drive with whatever fuel is left, or press ENTER to end your turn
 - **Music:** a procedural military march, fuller on the menus and softer in battle; Esc menu toggles music and sound effects separately
+- **Secret aim:** on an opponent's turn their angle and power read ??
 - **After-action report** at the end of each round: damage, accuracy and kills for every unit
 
 ## Online play
@@ -55,7 +56,7 @@ The control panel and a controls + ammo card sit in a strip below the battlefiel
 
 | Key | Action |
 |---|---|
-| ← → | Aim |
+| ← → | Aim (the angle is set against your hull: 90° is square to it, so on a slope you can aim below level) |
 | ↑ ↓ | Power (hold Shift for fine) |
 | A D | Drive (limited fuel) |
 | 1 2 3 4 | Choose weapon |
@@ -65,4 +66,4 @@ The control panel and a controls + ammo card sit in a strip below the battlefiel
 | ↑ ← ↓ → or W A S D | After a hit: enter the 4 arrows shown, in order, within 3 s |
 | M / P | Mute all (music + sound effects) / pause (offline only) |
 | Armory | ←/→ tank, ↑/↓ colour, Enter ready, Tab next player (hot-seat), N map, C CPU difficulty, G mode — or click |
-| Esc | In a game: menu with resume, settings (music, sound effects, volume, screen shake, film grain) and leave |
+| Esc | In a game, the armory or an online lobby: menu with resume, settings (music, sound effects, volume, screen shake, film grain) and leave |
