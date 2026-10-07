@@ -15,6 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
+const BUILD = '2026-10-07.1';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -3783,6 +3784,18 @@ cv.addEventListener('pointerup', ptrUp); cv.addEventListener('pointercancel', pt
 cv.addEventListener('pointerleave', () => { mouse.x = mouse.y = -1; });
 
 initMenuScene();
+// Browsers may keep a cached copy of the page for a while after an update. At startup, check the live file once and
+// reload if a newer build is out (only while on the main menu, never mid-game or mid-join, and once per session).
+(function checkForUpdate() {
+  if (location.protocol === 'file:' || !window.fetch) return;
+  fetch(location.pathname + '?v=' + Date.now(), {cache: 'no-store'}).then(r => r.ok ? r.text() : '').then(src => {
+    const m = src.match(/const BUILD = '([^']+)'/);
+    if (!m || m[1] === BUILD) return;
+    let tried = false;
+    try { tried = sessionStorage.getItem('ironrain.reloadedFor') === m[1]; sessionStorage.setItem('ironrain.reloadedFor', m[1]); } catch (e) {}
+    if (!tried && mode === 'menu' && !net) location.reload();
+  }).catch(() => {});
+})();
 
 // Fixed 60 Hz simulation, driven by a Web Worker timer so the host keeps running even when its tab is in the
 // background (browsers throttle normal timers/rAF in hidden tabs, which would freeze everyone else's game).
