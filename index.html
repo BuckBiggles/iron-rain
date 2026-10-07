@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-07.2';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-07.3';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -445,7 +445,7 @@ function makeScene(forceTheme, gdata, mi) {
   spawnFighter(0, Math.random() < .5); spawnFighter(1, Math.random() < .5);   // open on a fight already underway
   planes.forEach(p => { p.x = rnd(WW * .15, WW * .85); });
   veg = new Uint8Array(WW).fill(1);   // grass/weeds along the surface; blasted away by explosions
-  caves = []; tunnels = []; saucers = []; ghosts = []; fxQueue = [];
+  caves = []; tunnels = []; saucers = []; ghosts = []; fxQueue = []; ufoZaps = [];
 }
 
 // ====================================================== atmosphere: clouds, rain, lightning, dust, mist, grass, grain
@@ -810,6 +810,16 @@ function endMove() {   // back through 'settle' so a tank that drove off a ledge
   if (state !== 'move') return;
   moved = true; hit = [false, false, false, false]; state = 'settle'; aiTimer = 20; moveFrames = 0;
 }
+function passTurn() {   // end your turn without firing (host / offline)
+  if (state !== 'aim') return;
+  const t = tanks[turn];
+  emit({t: 'pop', x: t.x, y: t.y - 72, s: 'TURN PASSED', c: INK, z: 18});
+  moved = true; hit = [false, false, false, false]; state = 'settle'; aiTimer = 15; turnFrames = 0;
+}
+function requestPass() {   // this machine's player passes
+  if (net && net.role === 'client') { if (net.conn.open) net.conn.send({t: 'skip'}); }
+  else passTurn();
+}
 function requestEndMove() {   // this machine's player ends their move phase
   if (net && net.role === 'client') { if (net.conn.open) net.conn.send({t: 'end'}); }
   else endMove();
@@ -1067,6 +1077,7 @@ function applyEvent(e) {
       break;
     }
     case 'deathfx': if (COSMETICS.boom.some(b => b.id === e.k)) deathFx(e.k, e.x, e.y); break;
+    case 'ufozap': ufoZapFx(e); break;
     case 'cvh': { const c = caves[e.i]; if (c && !c.falling) { c.hp = e.hp; caveCrackFx(c); } break; }
     case 'cave': { const c = caves[e.i]; if (c && !c.falling) { c.falling = true; caveFx(c); } break; }
   }
@@ -1202,7 +1213,18 @@ function updateCaves(host) {
       disturbSand(); terrainDirty = true;
     }
   }
-  for (const s of saucers) s.t++;
+  for (const s of saucers) {
+    s.t++;
+    if (host && s.t === UFO_FIRE_AT && !s.fired) {   // on its way out, the saucer zaps whoever is parked nearest its old home
+      s.fired = true;
+      const p = saucerPos(s, s.t), live = tanks.filter(t => t.hp > 0);
+      const tgt = live.sort((a, b) => Math.abs(a.x - s.x) - Math.abs(b.x - s.x))[0];
+      if (tgt) {
+        emit({t: 'ufozap', x1: p.x, y1: p.y + 6, x2: tgt.x, y2: tgt.y - 12});
+        tgt.hp -= UFO_DAMAGE; emit({t: 'pop', x: tgt.x, y: tgt.y - 56, s: `👽 -${UFO_DAMAGE}`, c: '#7CFC00', z: 22});
+      }
+    }
+  }
   saucers = saucers.filter(s => s.t < 400);
 }
 function drawCaves() {   // inside the terrain clip, so a cave never shows above the surface
@@ -1271,10 +1293,35 @@ function drawAlien(x, y, face, col, blink, scared) {
   }
   ctx.restore();
 }
+// the escape saucer: climbs out of the rubble, hovers to take one shot at the nearest tank, then zips away
+const UFO_FIRE_AT = 62, UFO_DAMAGE = 25;
+let ufoZaps = [];
+function saucerPos(s, t) {
+  const away = Math.max(0, t - 80);
+  return {x: s.x + Math.sin(t * .18) * 6 + s.dir * away * away * .06, y: s.y - Math.min(t, 52) * 4.6 - away * 1.2};
+}
+function ufoZapFx(e) {   // everyone: a green ray from the saucer, sparks and a fizz at the target
+  ufoZaps.push({...e, life: 18});
+  burst(e.x2, e.y2, 26, {type: 'spark', color: '#9dff6b', s0: 1.5, s1: 5, l0: 14, l1: 28, z0: 1.2, z1: 2.2, drag: .93, g: .05});
+  flashes.push({x: e.x2, y: e.y2, r: 30, life: 8, max: 8});
+  tone(1800, 300, .35, 'sawtooth', .08); tone(900, 1600, .25, 'sine', .06);
+}
+function drawUfoZaps() {
+  for (const z of ufoZaps) {
+    const k = z.life / 18; ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineCap = 'round';
+    for (const [w, c] of [[9 * k + 2, `rgba(120,255,110,${(.35 * k).toFixed(2)})`], [2.5, `rgba(230,255,220,${k.toFixed(2)})`]]) {
+      ctx.strokeStyle = c; ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(z.x1, z.y1);
+      const n = 6; for (let i = 1; i <= n; i++) ctx.lineTo(lerp(z.x1, z.x2, i / n) + (i < n ? rnd(-3, 3) : 0), lerp(z.y1, z.y2, i / n));
+      ctx.stroke();
+    }
+    ctx.restore(); z.life--;
+  }
+  ufoZaps = ufoZaps.filter(z => z.life > 0);
+}
 function drawSaucers() {   // when their cave collapses the aliens escape: up through the dust, a wobble, then zip off
   for (const s of saucers) {
     const t = s.t, rise = Math.min(t, 80);
-    const x = s.x + Math.sin(t * .18) * 6 + (t > 80 ? s.dir * (t - 80) * (t - 80) * .06 : 0), y = s.y - rise * 4.2 - (t > 80 ? (t - 80) * 1.2 : 0);
+    const {x, y} = saucerPos(s, t);
     if (t < 80) {   // tractor-beam glow underneath
       ctx.fillStyle = 'rgba(170,255,190,.12)'; ctx.beginPath();
       ctx.moveTo(x - 8 * K, y); ctx.lineTo(x + 8 * K, y); ctx.lineTo(x + 26 * K, y + 90 * K); ctx.lineTo(x - 26 * K, y + 90 * K); ctx.fill();
@@ -1722,7 +1769,7 @@ function startQuick() {
   emit({t: 'sfx', n: 'hit'});
 }
 function startWheel(free) {   // free: the opening supply drop at the start of a tank's first turn (it then aims as normal)
-  wheel = {t: 0, spin: 210, idx: Math.floor(Math.random() * SPECIALS.length), flick: 0, free: !!free};
+  wheel = {t: 0, spin: 240, idx: Math.floor(Math.random() * SPECIALS.length), flick: 0, free: !!free};
   state = 'wheel';
 }
 function qteKey(k) {
@@ -1736,16 +1783,6 @@ function qteEnd(ok, msg) {
   q.done = true; q.ok = ok; q.msg = msg;
   emit({t: 'pop', x: t.x, y: t.y - 72, s: msg, c: ok ? '#86efac' : '#fca5a5', z: 22});
   emit({t: 'sfx', n: ok ? 'prize' : 'fail'});
-}
-function wheelTicks() {   // shared by host and clients: spin animation + tick sounds
-  const prev = wheel.t++;
-  const step = TAU / SPECIALS.length, slice = R => Math.floor((((-R) % TAU) + TAU) % TAU / step);
-  if (slice(wheelAngle(prev)) !== slice(wheelAngle(wheel.t)) && wheel.t < wheel.spin) { sfx.tick(); wheel.flick = 1; }
-  wheel.flick *= .85;
-}
-function wheelAngle(t) {
-  const step = TAU / SPECIALS.length, p = Math.min(1, t / wheel.spin);
-  return (TAU * 6 - (wheel.idx + .5) * step) * (1 - Math.pow(1 - p, 4));
 }
 
 // ====================================================== networking (WebRTC via PeerJS; host-authoritative)
@@ -1814,12 +1851,13 @@ function hostDrop(conn) {
 function hostData(conn, d) {
   const c = net && net.conns.find(c => c.conn === conn);
   if (c) c.seen = performance.now();
-  if (c && d && d.t === 'pick' && mode === 'armory') { armoryChange(c.seat, d); bcastArmory(); return; }
+  if (c && d && d.t === 'pick' && mode === 'armory') { armoryChange(c.seat, d); if (Number.isInteger(d.seq) && loadout[c.seat]) loadout[c.seat].seq = d.seq; bcastArmory(); return; }
   if (!c || mode !== 'play' || !d) return;
   const t = tanks[c.seat];
   if (d.t === 'qk' && t && !t.ai && state === 'quick' && turn === c.seat && typeof d.k === 'string') qteKey(d.k.slice(0, 1).toLowerCase());
   const aiming = state === 'aim', moving = state === 'move', frozen = t && t.status && t.status.id === 'frozen';
   if (d.t === 'end' && t && !t.ai && moving && turn === c.seat) { endMove(); return; }
+  if (d.t === 'skip' && t && !t.ai && aiming && turn === c.seat) { passTurn(); return; }
   if (((d.t === 'in' && (aiming || moving)) || (d.t === 'fire' && aiming)) && t && !t.ai && turn === c.seat) {
     if (aiming) {
       if (!frozen) t.angle = clamp(+d.a || 0, 0, 180);
@@ -1887,7 +1925,9 @@ function clientData(m) {
     case 'full': fail2(m.why); break;
     case 'lobby': net.occ = m.occ; numPlayers = m.np; teamMode = !!m.tm; break;
     case 'round': startClientRound(m); break;
-    case 'arm': loadout = m.p; armoryGo = m.go || 0; teamMode = !!m.tm; if (Number.isInteger(m.mp) && MAPS[m.mp]) mapIdx = m.mp; if (CPU_LEVELS[m.cl]) cpuLevel = m.cl; if (mode !== 'armory') { mode = 'armory'; menuButtons = []; nameEdit = -1; const nm = savedName(), mine = loadout[net.seat]; if (mine) requestPick(net.seat, {name: mine.name || nm, cos: loadProfile().equip}); } break;
+    case 'arm': { const mine = loadout && net && loadout[net.seat], fresh = mine && m.p[net.seat] && (m.p[net.seat].seq || 0) < (net.pickSeq || 0) && performance.now() - net.pickAt < 1500;
+      loadout = m.p; if (fresh) Object.assign(loadout[net.seat], {model: mine.model, color: mine.color, ready: mine.ready, team: mine.team, name: mine.name, cos: mine.cos}); }   // keep my newer local pick
+      armoryGo = m.go || 0; teamMode = !!m.tm; if (Number.isInteger(m.mp) && MAPS[m.mp]) mapIdx = m.mp; if (CPU_LEVELS[m.cl]) cpuLevel = m.cl; if (mode !== 'armory') { mode = 'armory'; menuButtons = []; nameEdit = -1; const nm = savedName(), mine = loadout[net.seat]; if (mine) requestPick(net.seat, {name: mine.name || nm, cos: loadProfile().equip}); } break;
     case 's': applySnap(m); break;
   }
 }
@@ -2390,7 +2430,7 @@ function drawWorld(actors) {
   for (const t of actors) if (t.hp > 0) drawTank(t, mode === 'play' && (state === 'aim' || state === 'move') && t.i === turn);
   for (const t of actors) if (t.hp > 0 && t.status) drawStatusFx(t);
   if (mode === 'play' && state === 'aim' && !paused) drawAimHelpers(tanks[turn]);
-  drawSaucers(); drawShots(); if (mode !== 'play') drawMenuShells(); drawParts(); drawGhosts(); drawBeams(); drawRainAndDust();
+  drawSaucers(); drawUfoZaps(); drawShots(); if (mode !== 'play') drawMenuShells(); drawParts(); drawGhosts(); drawBeams(); drawRainAndDust();
   ctx.restore();
   if (boltFlash > .03) { ctx.fillStyle = `rgba(215,228,255,${boltFlash * .3})`; ctx.fillRect(0, 0, WW, WH); }   // lightning lights up the field
   drawGrain();
@@ -2509,14 +2549,21 @@ function drawControlPanel() {
   } else { text('SUPPLY', x3 + 48, sy + 22, 11, 'rgba(230,224,196,.3)', 'center', '800'); text('earned by hits', x3 + 48, sy + 42, 10, 'rgba(230,224,196,.3)', 'center'); }
   // fire button
   const mineT = isMine(t) && !t.ai;
-  const fx = x + w - 92, moving = state === 'move' && mineT, ready = (state === 'aim' && mineT) || moving, p = ready ? 1 + Math.sin(T * .12) * .03 : 1;
-  ctx.save(); ctx.translate(fx + 40, sy + 30); ctx.scale(p, p);
-  if (ready) halo(-40, -30, 80, 60, 12, col);
-  rr(-40, -30, 80, 60, 12); ctx.fillStyle = moving ? '#c9b98a' : ready ? col : 'rgba(255,255,255,.08)'; ctx.fill(); noGlow();
-  if (ready && !moving) { hazard(-40, -30, 80, 8, .9); hazard(-40, 22, 80, 8, .9); }   // warning stripes on an armed trigger
-  text(moving ? 'END TURN' : t.ai ? 'CPU' : mineT ? 'FIRE' : 'WAIT', 0, -6, moving ? 14 : 17, moving ? '#1d1a10' : ready ? inkOn(col) : 'rgba(255,255,255,.45)', 'center', '900');
-  text(moving ? 'ENTER' : t.ai ? (state === 'aim' ? 'thinking…' : '') : mineT ? 'SPACE' : 'their turn', 0, 14, 10, ready ? 'rgba(0,0,0,.6)' : 'rgba(255,255,255,.4)', 'center', '800');
+  const fx = x + w - 92, moving = state === 'move' && mineT, aimMine = state === 'aim' && mineT, ready = aimMine || moving, p = ready ? 1 + Math.sin(T * .12) * .03 : 1;
+  const fh = aimMine ? 42 : 60;   // while aiming, FIRE shares the slot with a slim END TURN strip underneath
+  ctx.save(); ctx.translate(fx + 40, sy + fh / 2); ctx.scale(p, p);
+  if (ready) halo(-40, -fh / 2, 80, fh, 12, col);
+  rr(-40, -fh / 2, 80, fh, 12); ctx.fillStyle = moving ? '#c9b98a' : ready ? col : 'rgba(255,255,255,.08)'; ctx.fill(); noGlow();
+  if (aimMine) { hazard(-40, -fh / 2, 80, 6, .9); hazard(-40, fh / 2 - 6, 80, 6, .9); }   // warning stripes on an armed trigger
+  text(moving ? 'END TURN' : t.ai ? 'CPU' : mineT ? 'FIRE' : 'WAIT', 0, aimMine ? -3 : -6, moving ? 14 : 17, moving ? '#1d1a10' : ready ? inkOn(col) : 'rgba(255,255,255,.45)', 'center', '900');
+  text(moving ? 'ENTER' : t.ai ? (state === 'aim' ? 'thinking…' : '') : mineT ? 'SPACE' : 'their turn', 0, aimMine ? 10 : 14, aimMine ? 8.5 : 10, ready ? 'rgba(0,0,0,.6)' : 'rgba(255,255,255,.4)', 'center', '800');
   ctx.restore();
+  if (aimMine) {
+    const ey = sy + fh + 3, eh = 60 - fh - 3, hov = inRect(mouse, {x: fx, y: ey, w: 80, h: eh});
+    rr(fx, ey, 80, eh, 5); ctx.fillStyle = hov ? 'rgba(201,185,138,.9)' : 'rgba(201,185,138,.45)'; ctx.fill();
+    text('END TURN · E', fx + 40, ey + eh / 2 + .5, 9.5, '#1d1a10', 'center', '900');
+    uiButtons.push({x: fx, y: ey, w: 80, h: eh, tap: () => requestPass()});
+  }
   if (moving) uiButtons.push({x: fx, y: sy, w: 80, h: 60, tap: () => requestEndMove()});
   // mouse shortcuts (only for the tank this machine controls, while aiming)
   if (ready && !moving) {
@@ -2527,7 +2574,7 @@ function drawControlPanel() {
     uiButtons.push({x: px - 6, y: y0 + 22, w: pw + 12, h: 32, drag: mx => { t.power = clamp(Math.round((mx - px) / pw * 100), 5, 100); }});
     WEAPONS.forEach((wp, i) => uiButtons.push({x: sx + i * step, y: sy, w: sw2, h: sh, tap: () => { if (t.ammo[i] > 0) { t.weapon = i; t.armed = -1; sfx.click(); } }}));
     uiButtons.push({x: x3, y: sy, w: 96, h: sh, tap: () => cycleSupply(t)});
-    uiButtons.push({x: fx, y: sy, w: 80, h: 60, tap: () => { if (state === 'aim') tryFire(); }});
+    uiButtons.push({x: fx, y: sy, w: 80, h: fh, tap: () => { if (state === 'aim') tryFire(); }});
   }
 }
 
@@ -2569,7 +2616,7 @@ function drawInfoCard() {
   panel(x, y, w, h, 10);
   // controls (two rows of key chips)
   const rows = [[['← →', 'Aim'], ['↑ ↓', 'Power'], ['Shift', 'Fine'], ['A D', 'Drive'], ['1-4', 'Weapon'], ['Space', 'Fire']],
-                [['↑ ← ↓ →', 'Auth code'], ['Q', 'Supply'], ['Enter', 'End turn'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
+                [['↑ ← ↓ →', 'Auth code'], ['Q', 'Supply'], ['E', 'End turn'], ['T', assist ? 'Assist on' : 'Assist off'], ['M', muted ? 'Sound off' : 'Sound on'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
   rows.forEach((row, r) => {
     let cx = x + 12; const cy = y + 14 + r * 20;
     for (const [k, d] of row) {
@@ -2662,52 +2709,97 @@ function drawQuick() {
   ctx.restore();
 }
 
-function drawWheel() {
-  const n = SPECIALS.length, step = TAU / n, cx = W / 2, cy = H / 2 + 14, r = 168;
-  const R = wheelAngle(wheel.t), t = tanks[turn], done = wheel.t >= wheel.spin;
-  ctx.fillStyle = 'rgba(8,10,5,.93)'; ctx.fillRect(0, 0, W, H);
-  // rotating rays
-  ctx.save(); ctx.translate(cx, cy); ctx.rotate(T * .004);
-  for (let i = 0; i < 18; i++) { ctx.rotate(TAU / 18); ctx.fillStyle = 'rgba(255,255,255,.035)'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, 720, 0, TAU / 36); ctx.closePath(); ctx.fill(); }
-  ctx.restore();
-  text(`${wheel.free ? 'OPENING SUPPLY DROP' : 'SUPPLY DROP'} — ${unitName(turn)}`, cx, 52, 34, t.color, 'center', '900', 'rgba(0,0,0,.6)');
-  text(done ? 'SUPPLY DROP AUTHORIZED' : 'REQUISITIONING SUPPLIES…', cx, 88, 15, 'rgba(255,255,255,.7)', 'center', '800');
-  // outer ring
-  ctx.save(); glow(done ? SPECIALS[wheel.idx].color : '#facc15', 26);
-  ctx.beginPath(); ctx.arc(cx, cy, r + 20, 0, TAU); ctx.fillStyle = '#1d2016'; ctx.fill(); noGlow();
-  ctx.strokeStyle = '#d4a417'; ctx.lineWidth = 4; ctx.stroke(); ctx.restore();
-  for (let i = 0; i < 28; i++) {
-    const a = i / 28 * TAU, on = done ? (Math.floor(T / 6) % 2 === i % 2) : ((i + Math.floor(T / 3)) % 3 === 0);
-    ctx.fillStyle = on ? '#fff7b0' : '#8a7a2a'; if (on) glow('#ffe66d', 10);
-    ctx.beginPath(); ctx.arc(cx + Math.cos(a) * (r + 11), cy + Math.sin(a) * (r + 11), 4, 0, TAU); ctx.fill(); noGlow();
-  }
-  // slices
+// The wheel face (slices, labels, icons) is painted once into an offscreen image and then just rotated each frame,
+// so spinning costs one drawImage. Its angle is interpolated between game ticks, so it glides on any refresh rate.
+let wheelFace = null;
+const WHEEL_R = 168;
+function renderWheelFace() {
+  const n = SPECIALS.length, step = TAU / n, r = WHEEL_R, size = Math.ceil((r + 2) * 2 * S);
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const main = ctx; ctx = c.getContext('2d'); ctx.setTransform(S, 0, 0, S, 0, 0); ctx.translate(r + 1, r + 1);
   for (let i = 0; i < n; i++) {
-    const a0 = R + i * step - Math.PI / 2, sp = SPECIALS[i], win = done && i === wheel.idx;
-    const g = ctx.createRadialGradient(cx, cy, 10, cx, cy, r);
-    g.addColorStop(0, shade(sp.color, .08)); g.addColorStop(1, shade(sp.color, -.42));
-    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, a0, a0 + step); ctx.closePath(); ctx.fill();
-    if (win && Math.floor(T / 8) % 2) { ctx.fillStyle = 'rgba(255,255,255,.28)'; ctx.fill(); }
+    const a0 = i * step - Math.PI / 2, sp = SPECIALS[i];
+    const g = ctx.createRadialGradient(0, 0, 10, 0, 0, r);
+    g.addColorStop(0, shade(sp.color, .12)); g.addColorStop(.7, shade(sp.color, -.18)); g.addColorStop(1, shade(sp.color, -.48));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, r, a0, a0 + step); ctx.closePath(); ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 1.6; ctx.stroke();
-    ctx.save(); ctx.translate(cx, cy); ctx.rotate(a0 + step / 2);
+    ctx.save(); ctx.rotate(a0 + step / 2);
     text(sp.short || sp.name, r - 12, 0, 12.5, '#fff', 'right', '900', 'rgba(0,0,0,.5)');
     ctx.save(); ctx.translate(r - 104, 0); ctx.rotate(Math.PI / 2); text(sp.icon, 0, 0, 21, '#fff', 'center'); ctx.restore();
     ctx.restore();
   }
+  const sheen = ctx.createRadialGradient(-r * .3, -r * .35, 0, 0, 0, r);   // a soft highlight so it reads as a glossy disc
+  sheen.addColorStop(0, 'rgba(255,255,255,.16)'); sheen.addColorStop(.6, 'rgba(255,255,255,0)'); sheen.addColorStop(1, 'rgba(0,0,0,.22)');
+  ctx.fillStyle = sheen; ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
+  ctx = main;
+  return c;
+}
+function wheelTicks() {   // shared by host and clients: spin animation + tick sounds as each slice passes the pointer
+  const prev = wheel.t++;
+  const step = TAU / SPECIALS.length, slice = R => Math.floor((((-R) % TAU) + TAU) % TAU / step);
+  if (slice(wheelAngle(prev)) !== slice(wheelAngle(wheel.t)) && wheel.t < wheel.spin + 20) { sfx.tick(); wheel.flick = 1; }
+  wheel.flick *= .82;
+  if (wheel.t === wheel.spin) wheel.landT = T;
+}
+function wheelAngle(t) {   // a long ease-out, then a small overshoot past the prize that settles back onto it
+  const step = TAU / SPECIALS.length, p = Math.min(1, t / wheel.spin), target = TAU * 7 - (wheel.idx + .5) * step;
+  const ease = 1 - Math.pow(1 - p, 5);
+  const settle = p > .82 ? Math.sin((p - .82) / .18 * Math.PI) * step * .22 * (1 - p) / .18 : 0;
+  return target * ease + settle;
+}
+function drawWheel() {
+  if (!wheelFace) wheelFace = renderWheelFace();
+  const n = SPECIALS.length, step = TAU / n, cx = W / 2, cy = H / 2 + 14, r = WHEEL_R;
+  const frac = wheel.t < wheel.spin ? clamp((acc + performance.now() - lastTick) / (1000 / 60), 0, 1) : 0;   // between game ticks
+  const tt = wheel.t + frac, R = wheelAngle(tt), vel = Math.abs(wheelAngle(tt + 1) - R);
+  const t = tanks[turn], done = wheel.t >= wheel.spin, win = SPECIALS[wheel.idx];
+  ctx.fillStyle = 'rgba(8,10,5,.93)'; ctx.fillRect(0, 0, W, H);
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(T * .004 + R * .05);   // slow rays behind, nudged along by the spin
+  for (let i = 0; i < 18; i++) { ctx.rotate(TAU / 18); ctx.fillStyle = done ? win.color + '14' : 'rgba(255,255,255,.035)'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, 720, 0, TAU / 36); ctx.closePath(); ctx.fill(); }
+  ctx.restore();
+  text(`${wheel.free ? 'OPENING SUPPLY DROP' : 'SUPPLY DROP'} — ${unitName(turn)}`, cx, 52, 34, t.color, 'center', '900', 'rgba(0,0,0,.6)');
+  text(done ? 'SUPPLY DROP AUTHORIZED' : 'REQUISITIONING SUPPLIES…', cx, 88, 15, 'rgba(255,255,255,.7)', 'center', '800');
+  // outer ring with chasing lights (cheap halos instead of shadow blur)
+  ctx.strokeStyle = done ? win.color : '#facc15';   // round glow around the rim
+  for (const [w, a] of [[6, .3], [12, .12]]) { ctx.globalAlpha = a; ctx.lineWidth = w; ctx.beginPath(); ctx.arc(cx, cy, r + 22 + w / 2, 0, TAU); ctx.stroke(); }
+  ctx.globalAlpha = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, r + 20, 0, TAU); ctx.fillStyle = '#1d2016'; ctx.fill();
+  ctx.strokeStyle = '#d4a417'; ctx.lineWidth = 4; ctx.stroke();
+  const chase = Math.floor(T / (done ? 6 : 2.5));
+  for (let i = 0; i < 28; i++) {
+    const a = i / 28 * TAU, on = done ? (chase % 2 === i % 2) : ((i + chase) % 4 === 0), x = cx + Math.cos(a) * (r + 11), y = cy + Math.sin(a) * (r + 11);
+    if (on) { ctx.fillStyle = 'rgba(255,230,109,.28)'; ctx.beginPath(); ctx.arc(x, y, 8, 0, TAU); ctx.fill(); }
+    ctx.fillStyle = on ? '#fff7b0' : '#6f6224'; ctx.beginPath(); ctx.arc(x, y, 4, 0, TAU); ctx.fill();
+  }
+  // the face: a couple of faint trailing copies while it's moving fast (motion blur), then the real thing
+  const blur = Math.min(1, vel / .25), fs = (r + 1) * 2;
+  if (blur > .05) for (let k = 3; k >= 1; k--) {
+    ctx.save(); ctx.globalAlpha = .18 * blur; ctx.translate(cx, cy); ctx.rotate(R - vel * k * .45); ctx.drawImage(wheelFace, -r - 1, -r - 1, fs, fs); ctx.restore();
+  }
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(R); ctx.drawImage(wheelFace, -r - 1, -r - 1, fs, fs); ctx.restore();
+  if (done && Math.floor(T / 8) % 2) {   // the winning slice blinks under the pointer
+    const a0 = -Math.PI / 2 - step / 2 + (R - wheelAngle(wheel.spin));
+    ctx.fillStyle = 'rgba(255,255,255,.26)'; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, r, a0, a0 + step); ctx.closePath(); ctx.fill();
+  }
+  if (done && wheel.landT != null && T - wheel.landT < 24) {   // a ring bursting out when it lands
+    const k = (T - wheel.landT) / 24; ctx.strokeStyle = win.color; ctx.globalAlpha = 1 - k; ctx.lineWidth = 6 * (1 - k) + 1;
+    ctx.beginPath(); ctx.arc(cx, cy, r + 24 + k * 90, 0, TAU); ctx.stroke(); ctx.globalAlpha = 1;
+  }
   ctx.fillStyle = '#1d2016'; ctx.beginPath(); ctx.arc(cx, cy, 24, 0, TAU); ctx.fill();
   ctx.strokeStyle = '#d4a417'; ctx.lineWidth = 3; ctx.stroke();
   text('★', cx, cy + 1, 22, '#d4a417', 'center', '900');
-  // pointer
-  ctx.save(); ctx.translate(cx, cy - r - 24); ctx.rotate(wheel.flick * .35);
-  glow('#000', 8); ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.moveTo(0, 38); ctx.lineTo(-15, 4); ctx.lineTo(15, 4); ctx.closePath(); ctx.fill();
-  noGlow(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; ctx.stroke(); ctx.restore();
+  // pointer: kicks to the side each time a peg passes
+  ctx.save(); ctx.translate(cx, cy - r - 24); ctx.rotate(wheel.flick * .4);
+  ctx.fillStyle = 'rgba(0,0,0,.4)'; ctx.beginPath(); ctx.moveTo(2, 40); ctx.lineTo(-13, 6); ctx.lineTo(17, 6); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#ef4444'; ctx.beginPath(); ctx.moveTo(0, 38); ctx.lineTo(-15, 4); ctx.lineTo(15, 4); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; ctx.stroke(); ctx.restore();
   if (done) {
-    const sp = SPECIALS[wheel.idx], k = Math.min(1, (wheel.t - wheel.spin) / 14), y = H - 72;
-    ctx.save(); ctx.translate(cx, y); ctx.scale(.7 + .3 * k, .7 + .3 * k); ctx.globalAlpha = k;
-    glow(sp.color, 22); panel(-250, -34, 500, 68, 20, sp.color, 3); noGlow();
-    text(sp.icon, -212, 2, 34, '#fff', 'center');
-    text(sp.name, -178, -10, 24, '#fff', 'left', '900');
-    text(sp.desc + ' — added to your stockpile (Q to arm)', -178, 16, 13, 'rgba(255,255,255,.75)', 'left', '600');
+    const k = Math.min(1, (wheel.t - wheel.spin) / 14), y = H - 72, pop = 1 + Math.sin(Math.min(1, k) * Math.PI) * .06;
+    ctx.save(); ctx.translate(cx, y); ctx.scale((.7 + .3 * k) * pop, (.7 + .3 * k) * pop); ctx.globalAlpha = k;
+    halo(-250, -34, 500, 68, 20, win.color); panel(-250, -34, 500, 68, 20, win.color, 3);
+    text(win.icon, -212, 2, 34, '#fff', 'center');
+    text(win.name, -178, -10, 24, '#fff', 'left', '900');
+    text(win.desc + ' — added to your stockpile (Q to arm)', -178, 16, 13, 'rgba(255,255,255,.75)', 'left', '600');
     ctx.restore();
   }
 }
@@ -3271,7 +3363,10 @@ function armoryChange(i, ch) {   // validated change to one seat's pick (local i
 }
 function requestPick(i, ch) {    // from this machine's input
   if (!canEditSeat(i)) return;
-  if (net && net.role === 'client') { armoryChange(i, ch); if (net.conn.open) net.conn.send(Object.assign({t: 'pick'}, ch)); }
+  if (net && net.role === 'client') {   // numbered, so echoes of older picks from the host can't flip the preview back and forth
+    net.pickSeq = (net.pickSeq || 0) + 1; net.pickAt = performance.now();
+    armoryChange(i, ch); if (net.conn.open) net.conn.send(Object.assign({t: 'pick', seq: net.pickSeq}, ch));
+  }
   else { armoryChange(i, ch); if (net) bcastArmory(); }
   sfx.click();
 }
@@ -3746,6 +3841,7 @@ addEventListener('keydown', e => {
     return;
   }
   if (state === 'move' && !t.ai && isMine(t) && (k === 'enter' || k === 'e') && !e.repeat) { requestEndMove(); return; }
+  if (state === 'aim' && !t.ai && isMine(t) && k === 'e' && !e.repeat) { requestPass(); return; }   // end turn without firing
   if (state === 'aim' && !t.ai && isMine(t)) {
     if (k === ' ' && !e.repeat) tryFire();
     const n = '1234'.indexOf(k);
