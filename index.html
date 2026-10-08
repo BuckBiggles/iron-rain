@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-07.10';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-07.11';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -3045,10 +3045,10 @@ function drawCampaign() {   // the mission board: list on the left, the selected
 }
 
 // ====================================================== store: cosmetic upgrades bought with money earned in battle
-// Money: $10 per shot that hits an enemy, $30 per kill, $50 for a win. Paid to the human player(s) on this machine.
+// Money: $20 per shot that hits an enemy, $30 per kill, $100 for a win. Paid to the human player(s) on this machine.
 // Everything (money, what you own, what you have equipped) is kept in this browser's localStorage. Cosmetics are looks
 // only: camo and emblems are painted inside the hull, flags fly from the antenna (which isn't part of the hitbox either).
-const PAY = {hit: 10, kill: 30, win: 50};
+const PAY = {hit: 20, kill: 30, win: 100};
 const COSMETICS = {
   camo: [
     {id: 'std', name: 'FIELD STANDARD', price: 0}, {id: 'wood', name: 'WOODLAND', price: 150, base: '#55613a'}, {id: 'desert', name: 'DESERT STORM', price: 200, base: '#b8935c'},
