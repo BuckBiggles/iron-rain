@@ -56,7 +56,7 @@ The control panel and a controls + ammo card sit in a strip below the battlefiel
 
 | Key | Action |
 |---|---|
-| ← → | Aim (the angle is set against your hull: 90° is square to it, so on a slope you can aim below level) |
+| ← → | Aim (90° is straight up; the barrel sweeps the 180° above its hull, so on a 30° slope that is 30–210° and you can aim below level) |
 | ↑ ↓ | Power (hold Shift for fine) |
 | A D | Drive (limited fuel) |
 | 1 2 3 4 | Choose weapon |
