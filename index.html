@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-07.14';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-07.15';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -90,7 +90,7 @@ const TANKS = [
   {name:'JACKAL', role:'Light recon', hp:200, fuel:100, atk:108, wheels:4, wheelR:4.2,
    hull:[[-16,-12],[16,-12],[19.5,-14],[13,-18],[-13,-18],[-18.5,-14]],
    turret:[[-8.5,-18],[9,-18],[7.5,-22.5],[-4.5,-24],[-8.5,-21.5]], gun:{len:30, w:3.2}, antennas:2},
-  {name:'MAMMOTH', role:'Twin-gun heavy', hp:210, fuel:30, atk:104, wheels:6, wheelR:3.4, skirt:true,
+  {name:'MAMMOTH', role:'Twin-gun heavy', hp:210, fuel:30, atk:102, wheels:6, wheelR:3.4, skirt:true,
    hull:[[-20,-12.5],[20,-12.5],[23,-15],[18,-20.5],[-18,-20.5],[-23,-15]],
    turret:[[-14,-20.5],[13,-20.5],[13,-26],[8,-30],[-10,-30],[-14,-26]], gun:{len:28, w:3.8, sleeve:true, twin:true}, antennas:1},
   {name:'VIPER', role:'Tank destroyer', hp:180, fuel:70, atk:112, wheels:5, wheelR:3.5,
@@ -107,7 +107,7 @@ const TANKS = [
    turret:[[-13,-20],[11,-20],[16.5,-23.5],[8,-29],[-10,-29],[-14,-24.5]], gun:{len:30, w:4.4, sleeve:true, brake:true}, antennas:2},
 ];
 const HP_RANGE = [170, 230], FUEL_RANGE = [30, 100], ATK_RANGE = [90, 115];   // atk = % of a weapon's normal damage
-const atkRating = atk => 10 + Math.round((atk - 92) / 4);   // shown in the armory: 10 = 92% (Bulwark) up to 15 = 112% (Viper), 4% per point
+const atkRating = atk => 10 + Math.round((atk - 92) / 2) / 2;   // shown in the armory: 10 = 92% (Bulwark) up to 15 = 112% (Viper), 4% per point, in half points
 // Teams mode: two sides, last side standing wins. Friendly fire still hurts, but only hits on enemies earn a supply drop.
 const TEAMS = [{name:'ALPHA', color:'#5aa7e6'}, {name:'BRAVO', color:'#e2574c'}];
 let teamMode = false, winTeam = -1;
