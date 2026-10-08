@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-07.9';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-07.10';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -1573,17 +1573,16 @@ function tankCosmetics(t) {
     }
   }
 }
-// keyboard aiming/driving for a human-controlled tank on THIS machine
-function humanControl(t, moveOnly) {
+// keyboard aiming/driving for a human-controlled tank on THIS machine. Aim and power work in the move phase
+// after a shot too, so you can set up your next turn's shot while you drive.
+function humanControl(t) {
   const fine = keys['shift'] ? 0.2 : 1, frozen = t.status && t.status.id === 'frozen';
-  if (!moveOnly) {
-    if (!frozen) {   // a frozen barrel won't traverse
-      if (keys['arrowleft'])  t.angle = Math.min(aimHi(t), t.angle + fine);
-      if (keys['arrowright']) t.angle = Math.max(aimLo(t), t.angle - fine);
-    }
-    if (keys['arrowup'])    t.power = Math.min(100, t.power + fine * 0.6);
-    if (keys['arrowdown'])  t.power = Math.max(5, t.power - fine * 0.6);
+  if (!frozen) {   // a frozen barrel won't traverse
+    if (keys['arrowleft'])  t.angle = Math.min(aimHi(t), t.angle + fine);
+    if (keys['arrowright']) t.angle = Math.max(aimLo(t), t.angle - fine);
   }
+  if (keys['arrowup'])    t.power = Math.min(100, t.power + fine * 0.6);
+  if (keys['arrowdown'])  t.power = Math.max(5, t.power - fine * 0.6);
   if (!frozen) driveTank(t, (keys['d'] ? 1 : 0) - (keys['a'] ? 1 : 0));
 }
 
@@ -1713,7 +1712,7 @@ function updateGame() {
   if (state === 'move') {   // after the shot: drive with what's left in the tank, then the turn passes
     const t = tanks[turn];
     if (t.ai) { if (!aiMove || aiMove.frames-- <= 0) endMove(); else driveTank(t, aiMove.dir); }
-    else if (isMine(t)) humanControl(t, true);
+    else if (isMine(t)) humanControl(t);
     if (state === 'move' && (t.fuel <= 0 || t.hp <= 0)) endMove();
     else if (state === 'move' && moveFrames > 0 && --moveFrames === 0) endMove();
   }
@@ -1912,9 +1911,9 @@ function hostData(conn, d) {
   if (d.t === 'end' && t && !t.ai && moving && turn === c.seat) { endMove(); return; }
   if (d.t === 'skip' && t && !t.ai && aiming && turn === c.seat) { passTurn(); return; }
   if (((d.t === 'in' && (aiming || moving)) || (d.t === 'fire' && aiming)) && t && !t.ai && turn === c.seat) {
+    if (!frozen) { t.angle = +d.a || 0; clampAim(t); }   // aim and power can be set up for next turn while driving too
+    t.power = clamp(+d.p || 0, 5, 100);
     if (aiming) {
-      if (!frozen) { t.angle = +d.a || 0; clampAim(t); }
-      t.power = clamp(+d.p || 0, 5, 100);
       if (d.w >= 0 && d.w < WEAPONS.length && t.ammo[d.w | 0] > 0) t.weapon = d.w | 0;
       if (Number.isInteger(d.sp) && d.sp >= -1 && d.sp < t.stock.length) t.armed = d.sp;
     }
@@ -2041,7 +2040,7 @@ function updateClient() {
   updateCaves(false);
   const mine = (state === 'aim' || state === 'move') && turn === net.seat;
   for (const t of tanks) {
-    if (mine && t.i === net.seat) { humanControl(t, state === 'move'); t.y = ground[clamp(Math.floor(t.x), 0, WW - 1)] - 4; }
+    if (mine && t.i === net.seat) { humanControl(t); t.y = ground[clamp(Math.floor(t.x), 0, WW - 1)] - 4; }
     else if (t.init) { t.x = lerp(t.x, t.tx, .5); t.y = lerp(t.y, t.ty, .5); t.angle = lerp(t.angle, t.ta, .4); t.power = lerp(t.power, t.tp, .4); }
     tankCosmetics(t);
   }
@@ -2482,7 +2481,7 @@ function drawWorld(actors) {
   for (const t of actors) if (t.hp <= 0) drawTank(t, false);
   for (const t of actors) if (t.hp > 0) drawTank(t, mode === 'play' && (state === 'aim' || state === 'move') && t.i === turn);
   for (const t of actors) if (t.hp > 0 && t.status) drawStatusFx(t);
-  if (mode === 'play' && state === 'aim' && !paused) drawAimHelpers(tanks[turn]);
+  if (mode === 'play' && (state === 'aim' || state === 'move') && !paused) drawAimHelpers(tanks[turn]);   // while driving too, to line up next turn
   drawSaucers(); drawUfoZaps(); drawShots(); if (mode !== 'play') drawMenuShells(); drawParts(); drawGhosts(); drawBeams(); drawRainAndDust();
   ctx.restore();
   if (boltFlash > .03) { ctx.fillStyle = `rgba(215,228,255,${boltFlash * .3})`; ctx.fillRect(0, 0, WW, WH); }   // lightning lights up the field
@@ -2633,14 +2632,17 @@ function drawControlPanel() {
     uiButtons.push({x: fx, y: ey, w: 80, h: eh, tap: () => requestPass()});
   }
   if (moving) uiButtons.push({x: fx, y: sy, w: 80, h: 60, tap: () => requestEndMove()});
-  // mouse shortcuts (only for the tank this machine controls, while aiming)
-  if (ready && !moving) {
+  // mouse shortcuts (only for the tank this machine controls): angle and power while aiming or driving after the shot
+  if (ready) {
     uiButtons.push({x: gx - gr - 8, y: gy - gr - 8, w: gr * 2 + 16, h: gr * 2 + 16, drag: (mx, my) => {
+      if (t.status && t.status.id === 'frozen') return;   // a frozen barrel won't traverse
       let a = Math.atan2(gy - my, mx - gx) * 180 / Math.PI;   // the dial is level: point at the angle you want
       const mid = 90 - tiltDeg(t); while (a < mid - 180) a += 360; while (a > mid + 180) a -= 360;
       t.angle = clamp(a, aimLo(t), aimHi(t));
     }});
     uiButtons.push({x: px - 6, y: y0 + 22, w: pw + 12, h: 32, drag: mx => { t.power = clamp(Math.round((mx - px) / pw * 100), 5, 100); }});
+  }
+  if (ready && !moving) {
     WEAPONS.forEach((wp, i) => uiButtons.push({x: sx + i * step, y: sy, w: sw2, h: sh, tap: () => { if (t.ammo[i] > 0) { t.weapon = i; t.armed = -1; sfx.click(); } }}));
     uiButtons.push({x: x3, y: sy, w: 96, h: sh, tap: () => cycleSupply(t)});
     uiButtons.push({x: fx, y: sy, w: 80, h: fh, tap: () => { if (state === 'aim') tryFire(); }});

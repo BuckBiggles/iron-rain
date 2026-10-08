@@ -35,7 +35,7 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
   Mini Nuke, MIRV, **Dig Bomb** (blasts a massive pit, tanks fall in), Bouncer, **Lucky 7** (seven shells in a tight group), Teleport, Vampire, **Orbital Strike** (satellite laser),
   and four status shells that last through the victim's next turn: **Incendiary** (burning: 15 damage when it starts),
   **Cryo** (frozen: can't aim or drive), **Acid** (corroded: takes 50% more damage), **EMP** (shorted: half power)
-- **Move after you shoot:** once your shot lands, drive with whatever fuel is left, or press ENTER to end your turn
+- **Move after you shoot:** once your shot lands, drive with whatever fuel is left, or press ENTER to end your turn. You can also set your angle and power for your next shot while you drive
 - **Music:** a procedural military march, fuller on the menus and softer in battle; Esc menu toggles music and sound effects separately
 - **Secret aim:** on an opponent's turn their angle and power read ??
 - **After-action report** at the end of each round: damage, accuracy and kills for every unit
