@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-07.7';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-07.8';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -2545,22 +2545,27 @@ function drawControlPanel() {
   halo(x, y0, w, h, 16, col); panel(x, y0, w, h, 16, col, 2);
   // an enemy's (or a CPU's) angle and power stay secret: on their turn the readouts are blanked out
   const secret = !isMine(t) || t.ai;
-  // angle gauge: the dial tilts with the hull, since the angle is set against the hull (90 = square to it)
-  const gx = 152, gy = y0 + 70, gr = 52, tl = t.tilt || 0;
-  ctx.save(); rr(x, y0, w, h, 16); ctx.clip(); ctx.translate(gx, gy); ctx.rotate(tl);
-  ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(255,255,255,.1)'; ctx.beginPath(); ctx.arc(0, 0, gr - 6, Math.PI, TAU); ctx.stroke();
-  ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,.35)';
-  for (let d = 0; d <= 180; d += 30) { const c = Math.cos(d * Math.PI / 180), s = Math.sin(d * Math.PI / 180); ctx.beginPath(); ctx.moveTo(c * (gr - 2), -s * (gr - 2)); ctx.lineTo(c * (gr + 3), -s * (gr + 3)); ctx.stroke(); }
-  if (Math.abs(tl) > .02) { ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.setLineDash([3, 3]); ctx.beginPath(); ctx.moveTo(-gr, 0); ctx.lineTo(gr, 0); ctx.stroke(); ctx.setLineDash([]); }   // the hull line
-  if (!secret) {
-    const a = (t.angle + tiltDeg(t)) * Math.PI / 180;   // the dial is turned with the hull
-    ctx.save(); glow(col, 8); ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * (gr - 4), -Math.sin(a) * (gr - 4)); ctx.stroke(); ctx.restore();
+  // angle gauge: a level dial (90 = straight up, whatever the tank is sitting on); the bright arc is the 180° its hull lets the barrel reach
+  const gx = 196, gy = y0 + 45, gr = 32, lo = aimLo(t) * Math.PI / 180, hi = aimHi(t) * Math.PI / 180;
+  ctx.fillStyle = 'rgba(0,0,0,.22)'; ctx.beginPath(); ctx.arc(gx, gy, gr + 4, 0, TAU); ctx.fill();
+  ctx.lineWidth = 5; ctx.strokeStyle = 'rgba(255,255,255,.06)'; ctx.beginPath(); ctx.arc(gx, gy, gr - 4, 0, TAU); ctx.stroke();
+  ctx.strokeStyle = secret ? 'rgba(255,255,255,.14)' : col + '88'; ctx.beginPath(); ctx.arc(gx, gy, gr - 4, -hi, -lo); ctx.stroke();   // reachable (canvas angles run clockwise)
+  ctx.lineWidth = 1;
+  for (let d = 0; d < 360; d += 30) {
+    const c = Math.cos(d * Math.PI / 180), s = Math.sin(d * Math.PI / 180), major = d % 90 === 0;
+    ctx.strokeStyle = major ? 'rgba(255,255,255,.55)' : 'rgba(255,255,255,.25)';
+    ctx.beginPath(); ctx.moveTo(gx + c * (gr - (major ? 9 : 6)), gy - s * (gr - (major ? 9 : 6))); ctx.lineTo(gx + c * (gr + 2), gy - s * (gr + 2)); ctx.stroke();
   }
-  ctx.restore();
-  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(gx, gy, 4, 0, TAU); ctx.fill();
-  text(secret ? '??°' : Math.round(t.angle) + '°', gx, gy - 20, 18, secret ? INK_DIM : INK, 'center', '800');
-  text('ANGLE', gx, y0 + 12, 10, 'rgba(255,255,255,.55)', 'center', '800');
+  ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.setLineDash([2, 3]); ctx.beginPath(); ctx.moveTo(gx - gr, gy); ctx.lineTo(gx + gr, gy); ctx.stroke(); ctx.setLineDash([]);   // level
+  if (!secret) {
+    const a = t.angle * Math.PI / 180;
+    ctx.save(); glow(col, 8); ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx + Math.cos(a) * (gr - 3), gy - Math.sin(a) * (gr - 3)); ctx.stroke(); ctx.restore();
+  }
+  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(gx, gy, 3.5, 0, TAU); ctx.fill();
+  text('ANGLE', 108, y0 + 26, 10, 'rgba(255,255,255,.55)', 'left', '800');
+  text(secret ? '??°' : Math.round(t.angle) + '°', 108, y0 + 48, 20, secret ? INK_DIM : INK, 'left', '800');
+  if (!secret) text(`${Math.round(aimLo(t))}–${Math.round(aimHi(t))}°`, 108, y0 + 68, 9, INK_DIM, 'left', '700');   // what the hull allows
   // power
   const px = 240, pw = 284, st = t.status, eff = secret ? 0 : shotPower(t), dial = Math.round(t.power);
   if (secret) {
@@ -2630,8 +2635,8 @@ function drawControlPanel() {
   if (moving) uiButtons.push({x: fx, y: sy, w: 80, h: 60, tap: () => requestEndMove()});
   // mouse shortcuts (only for the tank this machine controls, while aiming)
   if (ready && !moving) {
-    uiButtons.push({x: gx - gr - 6, y: gy - gr - 8, w: gr * 2 + 12, h: gr + 22, drag: (mx, my) => {
-      let a = Math.atan2(gy - my, mx - gx) * 180 / Math.PI;   // the dial is tilted with the hull
+    uiButtons.push({x: gx - gr - 8, y: gy - gr - 8, w: gr * 2 + 16, h: gr * 2 + 16, drag: (mx, my) => {
+      let a = Math.atan2(gy - my, mx - gx) * 180 / Math.PI;   // the dial is level: point at the angle you want
       const mid = 90 - tiltDeg(t); while (a < mid - 180) a += 360; while (a > mid + 180) a -= 360;
       t.angle = clamp(a, aimLo(t), aimHi(t));
     }});
