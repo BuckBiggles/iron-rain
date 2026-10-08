@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-07.12';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-07.13';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -3560,8 +3560,8 @@ function drawArmory() {
     };
     bar('ARMOR', M.hp, HP_RANGE[0], HP_RANGE[1], py + 248, String(M.hp));
     bar('MOBILITY', M.fuel, FUEL_RANGE[0], FUEL_RANGE[1], py + 268, String(M.fuel));
-    const atkLo = Math.min(...TANKS.map(k => k.atk)), atkHi = Math.max(...TANKS.map(k => k.atk));   // attack reads 0 (the weakest gun) up to the strongest
-    bar('ATTACK', M.atk, atkLo, atkHi, py + 288, String(M.atk - atkLo));
+    const atkLo = Math.min(...TANKS.map(k => k.atk)), atkHi = Math.max(...TANKS.map(k => k.atk));   // attack reads 10 (the weakest gun) up to the strongest; 1 point = 1% damage
+    bar('ATTACK', M.atk, atkLo, atkHi, py + 288, String(M.atk - atkLo + 10));
     // colours
     text('COLOUR', px + 16, py + 312, 10, INK_DIM, 'left', '800');
     const taken = takenColors(i), sz = 24, sg = Math.min(8, (pw - 32 - 6 * sz) / 5), sx0 = px + (pw - (6 * sz + 5 * sg)) / 2;
