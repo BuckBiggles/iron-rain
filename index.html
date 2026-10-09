@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-08.1';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-08.2';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -3615,6 +3615,12 @@ function drawArmory() {
     text(who, px + pw - 12, py + 27, 11, who === 'YOU' ? p.color : INK_DIM, 'right', '800');
     // tank preview
     rr(px + 12, py + 50, pw - 24, 130, 10); ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fill();
+    if (editing) {   // a little tag under the name field: how to keep it
+      const tw = 132, tx = nameRect.x + 4, ty = py + 44;
+      ctx.fillStyle = '#d4a417'; ctx.beginPath(); ctx.moveTo(tx + 14, ty - 4); ctx.lineTo(tx + 20, ty); ctx.lineTo(tx + 8, ty); ctx.closePath(); ctx.fill();
+      rr(tx, ty, tw, 18, 5); ctx.fill();
+      text('ENTER ↵ to save your name', tx + tw / 2, ty + 9.5, 9.5, '#1d1a10', 'center', '900');
+    }
     ctx.fillStyle = 'rgba(120,110,80,.25)'; ctx.fillRect(px + 14, py + 158, pw - 28, 3);
     ctx.save(); ctx.translate(px + pw / 2, py + 158); ctx.scale(2.5, 2.5);
     drawTank({model: p.model, color: p.color, x: 0, y: -4, tilt: 0, angle: 30, recoil: 0, hp: 1, i, cos: p.cos}, false, true);
