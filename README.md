@@ -16,7 +16,7 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
   Churchill, Cromwell, IS-2, Hellcat, StuG III and Stuart — each with its own silhouette and its own ARMOR, MOBILITY
   and ATTACK (the damage a direct hit with the basic Missile does, 42 to 49; other shells scale the same way). They are
   balanced against each other from hundreds of CPU-vs-CPU duels: heavies hit hard but crawl, lights are quick but fragile
-  and a colour, then hits READY. CPUs pick at random.
+  Pick a tank and a colour, then hit READY. CPUs pick at random.
 - **Online multiplayer:** host a room, share the invite link or 5-letter code, friends join from their own browsers
 - **Store:** earn money in battle ($20 per hit, $30 per kill, $100 per win) and spend it on cosmetics: camo patterns
   (17, from Woodland to Galaxy), emblems, antenna flags, shell trails (11, from Frostbite to Stardust) and death effects
