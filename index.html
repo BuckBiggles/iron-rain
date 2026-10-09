@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-07.15';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-08.1';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -798,8 +798,7 @@ function startRound() {
   strikes = []; beams = []; uiParts = []; resetStats(); nameEdit = -1; roundPay = null;
   hit = [false, false, false, false]; shake = 0; whiteFlash = 0; paused = false; terrainDirty = false; sandActive = false;
   mode = 'play';
-  if (net && net.role === 'host') bcast({t: 'round', th: themeIdx, g: Array.from(ground, v => Math.round(v * 10)), np: numPlayers, ai: tanks.map(t => t.ai), lo: tanks.map(t => [t.model, t.color, t.team, t.name, t.cos]), tm: teamMode,
-                                         cv: caves.map(c => [c.x, c.w, c.top, c.h].map(Math.round))});
+  if (net && net.role === 'host') bcast(roundMsg());
   if (campaign) {   // mission set-up: air support for the player, who also gets the first shot
     const m = mission(); lastPick = {model: loadout[0].model, color: loadout[0].color}; campResult = null;
     tanks[0].stock = (m.stock || []).map(s => SPECIALS.find(q => q.short === s)).filter(Boolean);
@@ -862,11 +861,11 @@ function passTurn() {   // end your turn without firing (host / offline)
   moved = true; hit = [false, false, false, false]; state = 'settle'; aiTimer = 15; turnFrames = 0;
 }
 function requestPass() {   // this machine's player passes
-  if (net && net.role === 'client') { if (net.conn.open) net.conn.send({t: 'skip'}); }
+  if (net && net.role === 'client') { if (net.conn && net.conn.open) net.conn.send({t: 'skip'}); }
   else passTurn();
 }
 function requestEndMove() {   // this machine's player ends their move phase
-  if (net && net.role === 'client') { if (net.conn.open) net.conn.send({t: 'end'}); }
+  if (net && net.role === 'client') { if (net.conn && net.conn.open) net.conn.send({t: 'end'}); }
   else endMove();
 }
 function driveTank(t, dir) {   // shared by players and CPUs: crawl along the ground, burning fuel, unless it's too steep
@@ -1848,26 +1847,41 @@ function genCode() { let s = ''; for (let i = 0; i < 5; i++) s += ROOM_CHARS[Mat
 function inviteLink() { return location.href.split(/[?#]/)[0] + '?room=' + net.code; }
 function bcast(m) { if (net && net.role === 'host') for (const c of net.conns) if (c.conn.open) { try { c.conn.send(m); } catch (e) {} } }
 
+// Who this browser tab is, so a host can hand a dropped player their seat back. Kept per tab (sessionStorage): it survives
+// a refresh, and two tabs on one computer still count as two players.
+const myPid = (() => { const r = () => Math.random().toString(36).slice(2, 10); try { let p = sessionStorage.getItem('ironrain.pid'); if (!p) { p = r(); sessionStorage.setItem('ironrain.pid', p); } return p; } catch (e) { return r(); } })();
+function setRoomInUrl(code) {   // a refresh (or a crash and reopen) rejoins the same room
+  try { const u = new URL(location.href); if (code) u.searchParams.set('room', code); else u.searchParams.delete('room'); history.replaceState(null, '', u); } catch (e) {}
+}
+
 function leaveRoom(msg) {
   const n = net; net = null; netMsg = msg || ''; loadout = null;
-  if (n) { try { (n.conns || []).forEach(c => c.conn.close()); if (n.conn) n.conn.close(); if (n.peer) n.peer.destroy(); } catch (e) {} }
-  if (mode === 'play') { mode = 'menu'; }
-  shots = []; tanks = []; wheel = null; banner = null; evq = [];
-  initMenuScene(); menuStage = 'home';
+  if (n) {
+    if (n.role === 'host') (n.conns || []).forEach(c => { try { if (c.conn.open) c.conn.send({t: 'bye'}); } catch (e) {} });   // tell everyone the room is closing, so they don't sit there trying to reconnect
+    setTimeout(() => { try { (n.conns || []).forEach(c => c.conn.close()); if (n.conn) n.conn.close(); if (n.peer) n.peer.destroy(); } catch (e) {} }, 300);
+    if (n.role === 'client' && !n.lost) setRoomInUrl(null);
+    if (n.role === 'client' && n.lost) codeInput = n.code;   // dropped for good: the code is ready on the JOIN screen to try again
+  }
+  if (mode === 'play' || mode === 'armory') { mode = 'menu'; }
+  pauseMenu = false; shots = []; tanks = []; wheel = null; banner = null; evq = [];
+  initMenuScene(); menuStage = n && n.lost ? 'join' : 'home';
 }
 
 function hostRoom(n) {
   if (!netReady()) { netMsg = 'Online play needs the PeerJS library — check your internet connection.'; return; }
   numPlayers = n; netMsg = '';
-  net = {role: 'host', code: genCode(), seat: 0, conns: [], occ: [true, false, false, false], status: 'opening', peer: null};
+  net = {role: 'host', code: genCode(), seat: 0, conns: [], occ: [true, false, false, false], status: 'opening', peer: null,
+         pids: [myPid, null, null, null], dropped: [false, false, false, false], savedPick: []};
   menuStage = 'lobby';
   let peer;
   try { peer = new Peer('scorched-' + net.code); } catch (e) { leaveRoom('Could not start networking.'); return; }
   net.peer = peer;
   peer.on('open', () => { if (net && net.peer === peer) net.status = 'ready'; });
+  peer.on('disconnected', () => { if (net && net.peer === peer && !peer.destroyed) try { peer.reconnect(); } catch (e) {} });   // lost the broker: friends can't (re)join until it's back
   peer.on('error', e => {
     if (!net || net.peer !== peer) return;
     if (e.type === 'unavailable-id') { leaveRoom(); hostRoom(n); return; }
+    if (e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error' || e.type === 'socket-closed') return;   // broker hiccup: games already connected carry on
     leaveRoom('Network error (' + e.type + '). Please try again.');
   });
   peer.on('connection', onHostConn);
@@ -1875,34 +1889,69 @@ function hostRoom(n) {
 function onHostConn(conn) {
   conn.on('open', () => {
     if (!net || net.role !== 'host') { conn.close(); return; }
-    const seat = net.occ.findIndex((o, i) => i < numPlayers && !o);
-    if (mode !== 'menu' || seat < 0) {
-      conn.send({t: 'full', why: mode === 'play' ? 'That game has already started.' : 'That room is full.'});
-      setTimeout(() => conn.close(), 400); return;
-    }
-    net.occ[seat] = true; net.conns.push({conn, seat, seen: performance.now()});
-    conn.send({t: 'welcome', seat, np: numPlayers});
-    bcast({t: 'lobby', np: numPlayers, occ: net.occ, tm: teamMode});
+    setTimeout(() => { if (mode === 'menu') hostSeat(conn, null); }, 2500);   // an old copy of the game that never says hello still gets a lobby seat
   });
   conn.on('data', d => hostData(conn, d));
   conn.on('close', () => hostDrop(conn));
   conn.on('error', () => hostDrop(conn));
+}
+// Give a connection a seat: its own old seat if this player was here before (lobby, armory or mid-battle), otherwise
+// a free one in the lobby, or a dropped player's seat once the game is under way.
+function hostSeat(conn, pid) {
+  if (!net || net.role !== 'host' || !conn.open || net.conns.some(c => c.conn === conn)) return;
+  let seat = pid ? net.pids.findIndex((p, i) => p === pid && i > 0 && i < numPlayers) : -1;
+  if (seat >= 0) {   // back again: if their old connection hasn't timed out yet, this one replaces it
+    const old = net.conns.find(c => c.seat === seat);
+    if (old) { net.conns.splice(net.conns.indexOf(old), 1); try { old.conn.close(); } catch (e) {} }
+  } else if (mode === 'menu') seat = net.occ.findIndex((o, i) => i > 0 && i < numPlayers && !o);
+  else seat = net.dropped.findIndex((d, i) => d && i < numPlayers && !net.occ[i]);
+  if (seat < 0) {
+    conn.send({t: 'full', why: mode === 'menu' ? 'That room is full.' : 'That game has already started and no seat is free.'});
+    setTimeout(() => conn.close(), 400); return;
+  }
+  const back = net.dropped[seat];
+  net.occ[seat] = true; net.dropped[seat] = false; if (pid) net.pids[seat] = pid;
+  net.conns.push({conn, seat, seen: performance.now()});
+  conn.send({t: 'welcome', seat, np: numPlayers});
+  if (mode === 'armory') {   // their tank, colour and name come back (not ready, so they can look before the battle starts)
+    if (back || loadout[seat].cpu) {
+      const lo = Object.assign({}, net.savedPick[seat] || cpuPick(seat), {cpu: false, ready: false});
+      if (takenColors(seat).includes(lo.color)) lo.color = pick(PALETTE.filter(c => !takenColors(seat).includes(c)));
+      loadout[seat] = lo; armoryGo = 0;
+    }
+    bcastArmory();
+  } else if (mode === 'play') {
+    const t = tanks[seat];
+    if (t && t.ai) {
+      t.ai = false;
+      emit({t: 'pop', x: t.x, y: t.y - 72, s: `${unitName(seat)} RECONNECTED`, c: '#86efac', z: 14});
+      if (turn === seat && state === 'aim') { aiPlan = null; turnFrames = TURN_SECONDS * 60; }
+      if (turn === seat && state === 'move') { aiMove = null; moveFrames = MOVE_SECONDS * 60; }
+    }
+    conn.send(roundMsg());   // the battle as it stands right now; the regular snapshots fill in the rest
+    terrainDirty = true;
+  } else bcast({t: 'lobby', np: numPlayers, occ: net.occ, tm: teamMode});
 }
 function hostDrop(conn) {
   if (!net || net.role !== 'host') return;
   const i = net.conns.findIndex(c => c.conn === conn); if (i < 0) return;
   const seat = net.conns[i].seat; net.conns.splice(i, 1); net.occ[seat] = false;
   if (mode === 'play') {
+    net.dropped[seat] = true;   // the seat waits for them: rejoining with the same code hands it back
     const t = tanks[seat];
     if (t && !t.ai) {
-      t.ai = true; emit({t: 'pop', x: t.x, y: t.y - 72, s: 'DISCONNECTED → CPU', c: '#fff', z: 14});
+      t.ai = true; emit({t: 'pop', x: t.x, y: t.y - 72, s: 'DISCONNECTED → CPU UNTIL THEY REJOIN', c: '#fff', z: 14});
       if (state === 'aim' && turn === seat) { aiPlan = null; aiTimer = 60; turnFrames = 0; }
     }
-  } else if (mode === 'armory') { loadout[seat] = null; loadout[seat] = cpuPick(seat); balanceTeams(); bcastArmory(); }   // a dropped player's seat goes to a CPU
+  } else if (mode === 'armory') {   // a CPU minds the seat; their own pick is kept for when they come back
+    net.dropped[seat] = true; net.savedPick[seat] = loadout[seat];
+    loadout[seat] = null; loadout[seat] = cpuPick(seat); balanceTeams(); bcastArmory();
+  }
   else bcast({t: 'lobby', np: numPlayers, occ: net.occ, tm: teamMode});
 }
 function hostData(conn, d) {
   const c = net && net.conns.find(c => c.conn === conn);
+  if (!c && d && d.t === 'hello') { hostSeat(conn, typeof d.pid === 'string' ? d.pid.slice(0, 16) : null); return; }
   if (c) c.seen = performance.now();
   if (c && d && d.t === 'pick' && mode === 'armory') { armoryChange(c.seat, d); if (Number.isInteger(d.seq) && loadout[c.seat]) loadout[c.seat].seq = d.seq; bcastArmory(); return; }
   if (!c || mode !== 'play' || !d) return;
@@ -1926,6 +1975,11 @@ function hostData(conn, d) {
     if (d.t === 'fire') fire();
   }
 }
+// everything a client needs to draw the round: sent at the start, and to anyone rejoining part-way through
+function roundMsg() {
+  return {t: 'round', th: themeIdx, g: Array.from(ground, v => Math.round(v * 10)), np: numPlayers, ai: tanks.map(t => t.ai), lo: tanks.map(t => [t.model, t.color, t.team, t.name, t.cos]), tm: teamMode,
+          cv: caves.map(c => [...[c.x, c.w, c.top, c.h].map(Math.round), Math.round(c.hp), c.falling ? c.age : -1])};
+}
 function netBroadcast() {
   const m = {t: 's', st: state, tn: turn, w: wind, wn: winner, wt: winTeam, ws: wins,
     k: tanks.map(t => [r1(t.x), r1(t.y), Math.round(t.hp), r1(t.angle), r1(t.power), t.weapon, r1(t.fuel),
@@ -1938,25 +1992,47 @@ function netBroadcast() {
   bcast(m);
 }
 
+const RECONNECT_MS = 45000;   // how long a dropped client keeps trying before giving up
 function joinRoom(code) {
   code = (code || '').toUpperCase().trim();
   if (code.length < 4) { netMsg = 'Enter the room code your friend gave you.'; return; }
   if (!netReady()) { netMsg = 'Online play needs the PeerJS library — check your internet connection.'; return; }
   netMsg = 'Connecting…'; menuStage = 'connecting';
-  net = {role: 'client', code, seat: -1, status: 'connecting', peer: null, conn: null, occ: [], sent: false, sentAt: -999, lastIn: '', seen: performance.now()};
-  let peer;
-  try { peer = new Peer(); } catch (e) { leaveRoom('Could not start networking.'); menuStage = 'join'; return; }
-  net.peer = peer;
-  const fail = msg => { if (net && net.peer === peer) { leaveRoom(msg); menuStage = 'join'; } };
-  const timer = setTimeout(() => { if (net && net.peer === peer && net.status !== 'ready') fail('Could not reach that room. Check the code and try again.'); }, 15000);
-  peer.on('error', e => { clearTimeout(timer); fail(e.type === 'peer-unavailable' ? 'Room not found — check the code.' : 'Network error (' + e.type + ').'); });
-  peer.on('open', () => {
-    const conn = peer.connect('scorched-' + code, {reliable: true, serialization: 'json'});
-    net.conn = conn;
-    conn.on('data', clientData);
-    conn.on('close', () => { if (net && net.conn === conn) leaveRoom('Disconnected from the host.'); });
-    conn.on('error', () => { if (net && net.conn === conn) leaveRoom('Connection error.'); });
+  net = {role: 'client', code, seat: -1, status: 'connecting', peer: null, conn: null, occ: [], sent: false, sentAt: -999, lastIn: '', seen: performance.now(), re: null};
+  const n = net;
+  setTimeout(() => { if (net === n && n.status === 'connecting' && !n.re) { leaveRoom('Could not reach that room. Check the code and try again.'); menuStage = 'join'; } }, 15000);
+  clientConnect();
+}
+// (Re)connect to the host. A fresh peer each time the old one has lost the broker; the host recognises us by myPid.
+function clientConnect() {
+  const n = net; if (!n || n.role !== 'client') return;
+  let peer = n.peer;
+  const go = () => {
+    const prev = n.conn; n.conn = null; if (prev) try { prev.close(); } catch (e) {}   // only one attempt at a time, or the host would see a stray extra player
+    const conn = peer.connect('scorched-' + n.code, {reliable: true, serialization: 'json'});
+    n.conn = conn;
+    conn.on('open', () => { if (net === n && n.conn === conn) { try { conn.send({t: 'hello', pid: myPid}); } catch (e) {} } else conn.close(); });
+    conn.on('data', d => { if (net === n && n.conn === conn) clientData(d); });
+    conn.on('close', () => { if (net === n && n.conn === conn) clientLost('Disconnected from the host.'); });
+    conn.on('error', () => { if (net === n && n.conn === conn) clientLost('Connection error.'); });
+  };
+  if (peer && peer.open && !peer.destroyed) { go(); return; }
+  try { if (peer) peer.destroy(); } catch (e) {}
+  try { peer = new Peer(); } catch (e) { clientLost('Could not start networking.'); return; }
+  n.peer = peer;
+  peer.on('open', () => { if (net === n && n.peer === peer) go(); });
+  peer.on('error', e => {
+    if (net !== n || n.peer !== peer) return;
+    if (n.re) return;   // while reconnecting, failed attempts just wait for the next try
+    clientLost(e.type === 'peer-unavailable' ? 'Room not found — check the code.' : 'Network error (' + e.type + ').');
   });
+}
+function clientLost(msg) {
+  const n = net; if (!n || n.role !== 'client') return;
+  if (n.status === 'connecting' && !n.re) { leaveRoom(msg); menuStage = 'join'; return; }   // never got in: just say why
+  if (!n.re) n.re = {until: performance.now() + RECONNECT_MS, next: performance.now() + 1000, msg};
+  n.status = 'reconnecting'; n.lost = true;
+  const c = n.conn; n.conn = null; try { if (c) c.close(); } catch (e) {}
 }
 // heartbeat: browsers can take 30+ s to notice a vanished WebRTC peer, so we watch for silence ourselves
 function netTick() {
@@ -1968,15 +2044,20 @@ function netTick() {
   }
   if (net.role === 'host') {
     for (const c of [...net.conns]) if (now - c.seen > 10000) { hostDrop(c.conn); try { c.conn.close(); } catch (e) {} }
-  } else if (net.status === 'ready' && now - net.seen > 10000) leaveRoom('Lost connection to the host.');
+  } else if (net.re) {   // dropped: keep knocking on the host's door for a while
+    if (now > net.re.until) leaveRoom(net.re.msg + ' Rejoin with the same code to get your seat back.');
+    else if (now > net.re.next) { net.re.next = now + 4000; clientConnect(); }
+  } else if (net.status === 'ready' && now - net.seen > 10000) clientLost('Lost connection to the host.');
 }
 function clientData(m) {
   if (!net || net.role !== 'client' || !m) return;
   net.seen = performance.now();
   switch (m.t) {
-    case 'welcome': net.seat = m.seat; net.status = 'ready'; numPlayers = m.np; net.occ = []; menuStage = 'lobby'; netMsg = ''; break;
+    case 'welcome': net.seat = m.seat; net.status = 'ready'; net.re = null; net.lost = false; numPlayers = m.np; setRoomInUrl(net.code);
+      if (mode === 'menu') { net.occ = []; menuStage = 'lobby'; } netMsg = ''; break;
     case 'full': fail2(m.why); break;
-    case 'lobby': net.occ = m.occ; numPlayers = m.np; teamMode = !!m.tm; break;
+    case 'bye': leaveRoom('The host closed the room.'); break;
+    case 'lobby': net.occ = m.occ; numPlayers = m.np; teamMode = !!m.tm; if (mode !== 'menu') { mode = 'menu'; tanks = []; loadout = null; initMenuScene(); } menuStage = 'lobby'; break;
     case 'round': startClientRound(m); break;
     case 'arm': { const mine = loadout && net && loadout[net.seat], fresh = mine && m.p[net.seat] && (m.p[net.seat].seq || 0) < (net.pickSeq || 0) && performance.now() - net.pickAt < 1500;
       loadout = m.p; if (fresh) Object.assign(loadout[net.seat], {model: mine.model, color: mine.color, ready: mine.ready, team: mine.team, name: mine.name, cos: mine.cos}); }   // keep my newer local pick
@@ -1988,7 +2069,7 @@ function fail2(msg) { leaveRoom(msg || 'Could not join.'); menuStage = 'join'; }
 
 function startClientRound(m) {
   numPlayers = m.np; makeScene(m.th, m.g); teamMode = !!m.tm; resetStats(); roundPay = null;
-  caves = (m.cv || []).map(([x, w, top, h]) => newCave(x, w, top, h)); saucers = [];
+  caves = (m.cv || []).map(([x, w, top, h, hp, age]) => { const c = newCave(x, w, top, h); if (hp != null) c.hp = hp; if (age >= 0) { c.falling = true; c.age = age; } return c; }); saucers = [];   // (mid-round rejoin: caves already cracked or caved in)
   tanks = m.ai.map((ai, i) => {
     const [model, color, team, name, cos] = (m.lo && m.lo[i]) || [0, COLORS[i], i % 2, '', null], M = TANKS[model];
     return {i, x: 0, y: 0, tx: 0, ty: 0, ta: 90, tp: 100, init: false, model, team, hp: M.hp, maxHp: M.hp, shownHp: M.hp, status: null, angle: 90, power: 100,
@@ -2056,17 +2137,17 @@ function updateClient() {
   if (qte && state === 'quick' && !qte.done) qte.t++;   // smooth the countdown between snapshots
   if (mine && T % 4 === 0) {
     const t = tanks[net.seat], sig = [r1(t.angle), r1(t.power), t.weapon, r1(t.x), t.armed].join();
-    if (sig !== net.lastIn && net.conn.open) { net.lastIn = sig; net.conn.send({t: 'in', a: t.angle, p: t.power, w: t.weapon, x: t.x, sp: t.armed}); }
+    if (sig !== net.lastIn && net.conn && net.conn.open) { net.lastIn = sig; net.conn.send({t: 'in', a: t.angle, p: t.power, w: t.weapon, x: t.x, sp: t.armed}); }
   }
 }
 function pressCombo(k) {   // host/offline resolves a combo key, clients forward it to the host
-  if (net && net.role === 'client') { if (net.conn.open) net.conn.send({t: 'qk', k}); }
+  if (net && net.role === 'client') { if (net.conn && net.conn.open) net.conn.send({t: 'qk', k}); }
   else qteKey(k);
 }
 function tryFire() {
   if (net && net.role === 'client') {
     const t = tanks[net.seat];
-    if (!t || state !== 'aim' || turn !== net.seat || T - net.sentAt < 60) return;
+    if (!t || state !== 'aim' || turn !== net.seat || T - net.sentAt < 60 || !net.conn || !net.conn.open) return;
     net.sentAt = T; net.conn.send({t: 'fire', a: t.angle, p: t.power, w: t.weapon, x: t.x, sp: t.armed});
   } else fire();
 }
@@ -3437,7 +3518,7 @@ function requestPick(i, ch) {    // from this machine's input
   if (!canEditSeat(i)) return;
   if (net && net.role === 'client') {   // numbered, so echoes of older picks from the host can't flip the preview back and forth
     net.pickSeq = (net.pickSeq || 0) + 1; net.pickAt = performance.now();
-    armoryChange(i, ch); if (net.conn.open) net.conn.send(Object.assign({t: 'pick', seq: net.pickSeq}, ch));
+    armoryChange(i, ch); if (net.conn && net.conn.open) net.conn.send(Object.assign({t: 'pick', seq: net.pickSeq}, ch));
   }
   else { armoryChange(i, ch); if (net) bcastArmory(); }
   sfx.click();
@@ -3807,6 +3888,7 @@ function draw() {
     cv.style.cursor = 'default';
     if (pauseMenu) { uiButtons = []; drawPauseMenu(); }   // Esc menu: on top of everything, and the only thing clickable
   }
+  if (net && net.re) drawReconnecting();   // dropped from the host: trying to get back in
   if (infoPopup) drawInfoPopup();
   if (infoButtons.some(b => inRect(mouse, b)) || infoPopup) cv.style.cursor = 'pointer';
 }
@@ -3816,6 +3898,15 @@ function togglePauseMenu() { pauseMenu = !pauseMenu; quitArmed = -999; if (!net 
 function quitGame() {
   pauseMenu = false; paused = false;
   if (net) leaveRoom(); else if (campaign) leaveMission(false); else { mode = 'menu'; menuStage = 'home'; loadout = null; initMenuScene(); }
+}
+function drawReconnecting() {   // a client lost the host: the game waits under this while it keeps trying to get back in
+  const left = Math.max(0, Math.ceil((net.re.until - performance.now()) / 1000)), pw = 460, ph = 140, px = W / 2 - pw / 2, py = H / 2 - ph / 2;
+  ctx.fillStyle = 'rgba(6,8,4,.72)'; ctx.fillRect(0, 0, W, UH);
+  halo(px, py, pw, ph, 18, '#d4a417'); panel(px, py, pw, ph, 18, '#d4a417', 2.4);
+  text('RECONNECTING' + '.'.repeat(1 + Math.floor(T / 20) % 3), W / 2, py + 42, 28, INK, 'center', '900', 'rgba(0,0,0,.6)');
+  text(mode === 'play' ? 'lost the host — a CPU is driving your tank until you\'re back' : 'lost the host — your seat is being kept for you', W / 2, py + 74, 12, INK_DIM, 'center', '700');
+  text(`trying again · ${left}s left · Esc to give up`, W / 2, py + 104, 12, '#d4a417', 'center', '800');
+  cv.style.cursor = 'default';
 }
 function drawPauseMenu() {
   const pw = 440, ph = 446, px = W / 2 - pw / 2, py = H / 2 - ph / 2 + 4;
@@ -3885,6 +3976,7 @@ addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   keys[k] = true; audio();
   if (infoPopup && (k === 'escape' || k === 'enter' || k === ' ')) { infoPopup = null; e.preventDefault(); return; }   // close the ammo popup
+  if (net && net.re) { if (k === 'escape') leaveRoom('Stopped reconnecting.'); else if (k === 'm') muteAll(); return; }   // nothing else works until we're back in
   if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown', ' ', 'backspace'].includes(k)) e.preventDefault();
   if (mode === 'menu' && menuStage === 'join') {            // typing a room code
     if (k === 'escape') { menuStage = 'home'; netMsg = ''; }
@@ -3983,6 +4075,7 @@ const inRect = (p, b) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= 
 const activePtr = new Map();   // pointer currently dragging a control (power bar / angle dial)
 cv.addEventListener('pointerdown', e => {
   audio(); Object.assign(mouse, toCanvas(e));
+  if (net && net.re) return;   // reconnecting: clicks wait until we're back in
   if (pauseMenu) { for (const b of uiButtons) if (inRect(mouse, b)) { if (b.tap) b.tap(); break; } return; }   // only the menu while it's open
   if (infoPopup) { infoPopup = null; return; }                                   // any click closes the ammo popup
   for (const b of infoButtons) if (inRect(mouse, b)) { b.action(); return; }   // ammo chips on the info card

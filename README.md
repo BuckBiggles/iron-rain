@@ -48,7 +48,10 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
 
 The host's browser runs the game and streams it to everyone (WebRTC peer-to-peer through
 [PeerJS](https://peerjs.com)'s free broker), so the host should keep their tab open.
-If someone drops, their tank becomes a CPU.
+If a friend drops out, a CPU minds their seat and their game keeps trying to reconnect for 45 seconds.
+They can also rejoin any time with the same code or invite link (or just refresh the page): they get their
+own seat back, in the lobby, in the armory (with their tank and colour) or mid-battle. A newcomer can take over
+a dropped player's seat once the game has started.
 
 ## Controls
 
