@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-08.3';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-08.4';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -78,33 +78,40 @@ const COLORS = ['#86a64a', '#d4a95c', '#6f93b3', '#c0583d'];
 const ALLW = [...WEAPONS, ...SPECIALS, CHILD];   // index = id used on the wire
 // colours players can pick in the armory (no two units may share one)
 const PALETTE = ['#86a64a', '#d4a95c', '#6f93b3', '#c0583d', '#5d7a3a', '#8f8f86', '#3d4248', '#d9dccf', '#4a5f86', '#8a6f4e', '#9c6b8f', '#d6b13a'];
-// the 8 tanks in the armory: same physics footprint, different looks plus an armor-vs-mobility trade-off.
-// Coordinates are in tank space (ground contact at y = 0, gun pivot at y = -22).
+// the tanks in the armory, each drawn after a real WW2 tank: same physics footprint, different silhouettes, and a
+// trade-off between ARMOR (hp), MOBILITY (fuel) and ATTACK (% of a weapon's normal damage).
+// Coordinates are in tank space (ground contact at y = 0, gun pivot at y = -22, nose to the right).
 const TANKS = [
-  {name:'WARHOUND', role:'Main battle tank', hp:210, fuel:60, atk:100, wheels:5, wheelR:3.7,
-   hull:[[-17,-12.5],[17,-12.5],[21,-15],[15.5,-19.5],[-15.5,-19.5],[-21,-15]],
-   turret:[[-12,-19.5],[12,-19.5],[10.5,-24.5],[3.5,-28],[-7.5,-28],[-11.5,-24]], gun:{len:29, w:4.4, sleeve:true, brake:true}, antennas:1},
-  {name:'BULWARK', role:'Heavy assault', hp:220, fuel:35, atk:92, wheels:6, wheelR:3.2, skirt:true,
-   hull:[[-19,-12.5],[19,-12.5],[22.5,-15.5],[19,-21],[-19,-21],[-22.5,-15.5]],
-   turret:[[-13.5,-21],[13.5,-21],[12.5,-26.5],[7,-30.5],[-9,-30.5],[-13.5,-26.5]], gun:{len:30, w:5.4, sleeve:true, brake:true}, antennas:1},
-  {name:'JACKAL', role:'Light recon', hp:200, fuel:100, atk:108, wheels:4, wheelR:4.2,
-   hull:[[-16,-12],[16,-12],[19.5,-14],[13,-18],[-13,-18],[-18.5,-14]],
-   turret:[[-8.5,-18],[9,-18],[7.5,-22.5],[-4.5,-24],[-8.5,-21.5]], gun:{len:30, w:3.2}, antennas:2},
-  {name:'MAMMOTH', role:'Twin-gun heavy', hp:210, fuel:30, atk:102, wheels:6, wheelR:3.4, skirt:true,
-   hull:[[-20,-12.5],[20,-12.5],[23,-15],[18,-20.5],[-18,-20.5],[-23,-15]],
-   turret:[[-14,-20.5],[13,-20.5],[13,-26],[8,-30],[-10,-30],[-14,-26]], gun:{len:28, w:3.8, sleeve:true, twin:true}, antennas:1},
-  {name:'VIPER', role:'Tank destroyer', hp:180, fuel:70, atk:112, wheels:5, wheelR:3.5,
-   hull:[[-18,-12.5],[18,-12.5],[22,-14],[12,-19],[-16,-19.5],[-20,-15]],
-   turret:[[-13,-19],[14,-19],[11,-22.5],[-11,-24]], gun:{len:32, w:3.8, brake:true}, antennas:0},
-  {name:'RHINO', role:'Assault / dozer', hp:215, fuel:50, atk:100, wheels:5, wheelR:3.7, dozer:true,
-   hull:[[-17,-12.5],[17,-12.5],[19,-15],[16,-20],[-16,-20],[-20,-15.5]],
-   dome:{rx:11, ry:8.5}, gun:{len:27, w:5.6, brake:true}, antennas:1},
-  {name:'SCORPION', role:'Desert long-gun', hp:195, fuel:65, atk:104, wheels:5, wheelR:3.6, skirt:true,
-   hull:[[-17,-12.5],[17,-12.5],[21,-14.5],[14,-18.5],[-14,-18.5],[-20,-14.5]],
-   dome:{rx:10, ry:7}, gun:{len:33, w:3.4, sleeve:true}, antennas:1},
-  {name:'KODIAK', role:'Reactive-armor MBT', hp:212, fuel:55, atk:100, wheels:5, wheelR:3.7, era:true,
-   hull:[[-18,-12.5],[18,-12.5],[21.5,-15],[16,-20],[-16,-20],[-21,-15]],
-   turret:[[-13,-20],[11,-20],[16.5,-23.5],[8,-29],[-10,-29],[-14,-24.5]], gun:{len:30, w:4.4, sleeve:true, brake:true}, antennas:2},
+  {name:'SHERMAN', role:'M4 · US medium', hp:205, fuel:65, atk:100, wheels:6, wheelR:3.3,   // tall hull, sloped glacis, cast turret
+   hull:[[-19,-12.5],[19,-12.5],[22,-14],[14,-21.5],[-17,-21.5],[-20,-15]],
+   dome:{rx:11, ry:8}, gun:{len:27, w:4.2, sleeve:true}, antennas:1},
+  {name:'T-34', role:'T-34/85 · Soviet medium', hp:200, fuel:80, atk:106, wheels:5, wheelR:4.4,   // low, sloped all round, big Christie wheels
+   hull:[[-19,-12.5],[19,-12.5],[23,-14],[13,-19],[-15,-19],[-21,-14.5]],
+   turret:[[-11,-19],[13,-19],[12,-24],[7,-27],[-9,-27],[-13,-23]], gun:{len:33, w:3.8, sleeve:true}, antennas:1},
+  {name:'TIGER I', role:'German heavy', hp:210, fuel:30, atk:108, wheels:8, wheelR:3.4,   // slab sides, boxy turret, interleaved wheels
+   hull:[[-20,-12.5],[20,-12.5],[22,-14],[21,-20.5],[-20,-20.5],[-21,-14]],
+   turret:[[-14,-20.5],[13,-20.5],[13.5,-27],[11,-29],[-12,-29],[-14,-27]], gun:{len:31, w:4.8, sleeve:true, brake:true}, antennas:1},
+  {name:'PANTHER', role:'German medium', hp:210, fuel:50, atk:105, wheels:8, wheelR:3.3, skirt:true,   // long sloped hull, side plates, long 75
+   hull:[[-20,-12.5],[20,-12.5],[24,-14],[13,-20],[-17,-20],[-21,-15]],
+   turret:[[-12,-20],[11,-20],[9.5,-26.5],[-10,-27.5],[-13,-24]], gun:{len:35, w:3.8, sleeve:true, brake:true}, antennas:1},
+  {name:'CHURCHILL', role:'British infantry tank', hp:230, fuel:35, atk:94, wheels:9, wheelR:2.4, skirt:true,   // long box, high track guards, small bogies
+   hull:[[-21,-12.5],[21,-12.5],[22.5,-15],[21.5,-20],[-21,-20],[-22,-15]],
+   turret:[[-10,-20],[10,-20],[10,-27],[-10,-27]], gun:{len:25, w:4.4, sleeve:true}, antennas:2},
+  {name:'CROMWELL', role:'British cruiser', hp:198, fuel:90, atk:100, wheels:5, wheelR:4.4,   // flat-sided and quick
+   hull:[[-19,-12.5],[19,-12.5],[21,-14],[20,-19],[-19,-19],[-21,-14]],
+   turret:[[-11,-19],[12,-19],[12,-25.5],[10.5,-27],[-10,-27],[-11,-25.5]], gun:{len:27, w:3.8, sleeve:true, brake:true}, antennas:2},
+  {name:'IS-2', role:'Soviet heavy', hp:200, fuel:40, atk:108, wheels:6, wheelR:3.8,   // the 122 mm: a huge gun on a cast turret
+   hull:[[-20,-12.5],[20,-12.5],[24,-14],[14,-20],[-16,-20],[-22,-15]],
+   dome:{rx:12.5, ry:8.5}, gun:{len:32, w:5.2, sleeve:true, brake:true}, antennas:1},
+  {name:'HELLCAT', role:'M18 · US tank destroyer', hp:186, fuel:100, atk:108, wheels:5, wheelR:3.9,   // open-topped, fastest on tracks
+   hull:[[-19,-12.5],[19,-12.5],[22,-14],[14,-19],[-18,-19],[-20,-14.5]],
+   turret:[[-11,-19],[11,-19],[13,-23.5],[-12,-24.5]], gun:{len:32, w:3.6, brake:true}, antennas:1},
+  {name:'STUG III', role:'German assault gun', hp:195, fuel:55, atk:104, wheels:6, wheelR:3.6, skirt:true,   // no turret: a low casemate
+   hull:[[-19,-12.5],[19,-12.5],[22,-14.5],[21,-18.5],[-19,-18.5],[-21,-14.5]],
+   turret:[[-12,-18.5],[16,-18.5],[14,-24],[-12,-24]], gun:{len:27, w:4.2, sleeve:true, brake:true}, antennas:0},
+  {name:'STUART', role:'M5 · US light', hp:200, fuel:100, atk:100, wheels:4, wheelR:3.9,   // small, tall and nimble
+   hull:[[-16,-12.5],[16,-12.5],[19,-14],[13,-21],[-15,-21],[-18,-15]],
+   turret:[[-8,-21],[8,-21],[8,-26.5],[-8,-26.5]], gun:{len:23, w:3}, antennas:2},
 ];
 const HP_RANGE = [170, 230], FUEL_RANGE = [30, 100], ATK_RANGE = [90, 115];   // atk = % of a weapon's normal damage
 const missileHit = atk => Math.round(WEAPONS[0].damage * atk / 100);   // the armory's ATTACK: what a direct hit with the basic Missile does
@@ -3008,25 +3015,25 @@ function drawOver() {
 // Each mission fixes the map, the weather, the enemy (and allied) tanks with their own CPU difficulty, and may hand the
 // player some supply specials ("air support"). The player picks their own tank. Stars: win · finish above half armor ·
 // win within `par` shots. Progress lives in this browser's localStorage (and the game works without it).
-// models: 0 Warhound 1 Bulwark 2 Jackal 3 Mammoth 4 Viper 5 Rhino 6 Scorpion 7 Kodiak · maps: 0 Hills 1 Pass 2 Gorge 3 Steppe 4 Badlands
+// models: 0 Sherman 1 T-34 2 Tiger I 3 Panther 4 Churchill 5 Cromwell 6 IS-2 7 Hellcat 8 StuG III 9 Stuart · maps: 0 Hills 1 Pass 2 Gorge 3 Steppe 4 Badlands
 // themes: 0 Overcast 1 Dusk 2 Night 3 Arid · lvl: 0 Easy 1 Normal 2 Hard 3 Expert
 const MISSIONS = [
-  {name: 'FIRST LIGHT', map: 0, theme: 0, par: 6, enemies: [{model: 2, lvl: 0}],
+  {name: 'FIRST LIGHT', map: 0, theme: 0, par: 6, enemies: [{model: 9, lvl: 0}],
    brief: 'A lone enemy scout is probing our lines. Knock it out and get the feel of your gun. Every power point carries a shell the same distance: adjust, fire, adjust again.'},
-  {name: 'HILL 203', map: 1, theme: 1, par: 8, enemies: [{model: 0, lvl: 1}],
+  {name: 'HILL 203', map: 1, theme: 1, par: 8, enemies: [{model: 1, lvl: 1}],
    brief: 'The enemy holds the far side of the ridge. Lob your shells high over the peak, or bore straight through it with a drill.'},
-  {name: 'THE GORGE', map: 2, theme: 0, par: 10, enemies: [{model: 5, lvl: 0}, {model: 2, lvl: 0}],
-   brief: 'Two light units are dug in across the canyon and they will both be shooting at you. Pick them off one at a time, and move after every shot.'},
-  {name: 'DUST DEVIL', map: 3, theme: 3, par: 8, enemies: [{model: 4, lvl: 2}],
-   brief: 'Open steppe, nowhere to hide, and a Viper tank destroyer hunting you. It hits hard and it hits often. Strike first.'},
-  {name: 'BADLANDS PATROL', map: 4, theme: 1, par: 10, allies: [{model: 7, lvl: 1}], enemies: [{model: 5, lvl: 1}, {model: 6, lvl: 1}],
-   brief: 'You are not alone this time: a Kodiak crew rides with you. Mesas break up the lines of fire. Mind your friend, friendly fire still hurts.'},
-  {name: 'NIGHT RAID', map: 0, theme: 2, par: 12, stock: ['LUCKY 7'], enemies: [{model: 1, lvl: 2}, {model: 0, lvl: 1}],
-   brief: 'Under cover of darkness and rain, hit a Bulwark heavy and its escort. Command has released a LUCKY 7 battery to you: press Q to arm it.'},
-  {name: 'CAVERN COUNTRY', map: 2, theme: 3, par: 12, stock: ['ORBITAL'], allies: [{model: 2, lvl: 2}], enemies: [{model: 3, lvl: 2}, {model: 7, lvl: 2}],
+  {name: 'THE GORGE', map: 2, theme: 0, par: 10, enemies: [{model: 8, lvl: 0}, {model: 9, lvl: 0}],
+   brief: 'An assault gun and a light tank are dug in across the canyon and they will both be shooting at you. Pick them off one at a time, and move after every shot.'},
+  {name: 'DUST DEVIL', map: 3, theme: 3, par: 8, enemies: [{model: 7, lvl: 2}],
+   brief: 'Open steppe, nowhere to hide, and a Hellcat tank destroyer hunting you. It hits hard and it hits often. Strike first.'},
+  {name: 'BADLANDS PATROL', map: 4, theme: 1, par: 10, allies: [{model: 5, lvl: 1}], enemies: [{model: 8, lvl: 1}, {model: 3, lvl: 1}],
+   brief: 'You are not alone this time: a Cromwell crew rides with you. Mesas break up the lines of fire. Mind your friend, friendly fire still hurts.'},
+  {name: 'NIGHT RAID', map: 0, theme: 2, par: 12, stock: ['LUCKY 7'], enemies: [{model: 4, lvl: 2}, {model: 0, lvl: 1}],
+   brief: 'Under cover of darkness and rain, hit a Churchill and its Sherman escort. Command has released a LUCKY 7 battery to you: press Q to arm it.'},
+  {name: 'CAVERN COUNTRY', map: 2, theme: 3, par: 12, stock: ['ORBITAL'], allies: [{model: 1, lvl: 2}], enemies: [{model: 6, lvl: 2}, {model: 8, lvl: 2}],
    brief: 'The enemy has parked its heavies above old caverns. Crack the roofs and drop them in. One orbital strike is authorized.'},
-  {name: 'IRON RAIN', map: 1, theme: 1, par: 14, stock: ['MINI NUKE', 'ORBITAL'], allies: [{model: 7, lvl: 2}], enemies: [{model: 3, lvl: 3}, {model: 4, lvl: 3}],
-   brief: 'The final push. Their best crews, a Mammoth and a Viper, hold the pass. Everything we have is yours: a mini nuke, an orbital strike and a veteran wingman. Make it rain.'},
+  {name: 'IRON RAIN', map: 1, theme: 1, par: 14, stock: ['MINI NUKE', 'ORBITAL'], allies: [{model: 0, lvl: 2}], enemies: [{model: 2, lvl: 3}, {model: 3, lvl: 3}],
+   brief: 'The final push. Their best crews, a Tiger and a Panther, hold the pass. Everything we have is yours: a mini nuke, an orbital strike and a veteran wingman. Make it rain.'},
 ];
 let campaign = null, campSel = 0, campResult = null, lastPick = null;
 function campProgress() {
