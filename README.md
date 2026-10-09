@@ -13,7 +13,7 @@ An armored-artillery game in the spirit of Scorched Earth, with a military look,
 - Spawn points are random, except 1v1 and 2v2, which use fixed, tested positions
 - WWII skies: fighters dogfight and bombers drone over in the background
 - **Armory:** before the battle every player picks one of 8 tanks (Warhound, Bulwark, Jackal, Mammoth, Viper,
-  Rhino, Scorpion, Kodiak — each with its own ARMOR, MOBILITY and ATTACK, rated 10 for the weakest gun (Bulwark) up to 15 for the strongest (Viper); each point is 4% more damage, in half points)
+  Rhino, Scorpion, Kodiak — each with its own ARMOR, MOBILITY and ATTACK, the damage a direct hit with the basic Missile does: 41 for the Bulwark up to 50 for the Viper; other shells scale the same way)
   and a colour, then hits READY. CPUs pick at random.
 - **Online multiplayer:** host a room, share the invite link or 5-letter code, friends join from their own browsers
 - **Store:** earn money in battle ($20 per hit, $30 per kill, $100 per win) and spend it on cosmetics: camo patterns

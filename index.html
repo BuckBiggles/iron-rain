@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-08.2';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-08.3';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -107,7 +107,7 @@ const TANKS = [
    turret:[[-13,-20],[11,-20],[16.5,-23.5],[8,-29],[-10,-29],[-14,-24.5]], gun:{len:30, w:4.4, sleeve:true, brake:true}, antennas:2},
 ];
 const HP_RANGE = [170, 230], FUEL_RANGE = [30, 100], ATK_RANGE = [90, 115];   // atk = % of a weapon's normal damage
-const atkRating = atk => 10 + Math.round((atk - 92) / 2) / 2;   // shown in the armory: 10 = 92% (Bulwark) up to 15 = 112% (Viper), 4% per point, in half points
+const missileHit = atk => Math.round(WEAPONS[0].damage * atk / 100);   // the armory's ATTACK: what a direct hit with the basic Missile does
 // Teams mode: two sides, last side standing wins. Friendly fire still hurts, but only hits on enemies earn a supply drop.
 const TEAMS = [{name:'ALPHA', color:'#5aa7e6'}, {name:'BRAVO', color:'#e2574c'}];
 let teamMode = false, winTeam = -1;
@@ -3649,7 +3649,7 @@ function drawArmory() {
     bar('ARMOR', M.hp, HP_RANGE[0], HP_RANGE[1], py + 248, String(M.hp));
     bar('MOBILITY', M.fuel, FUEL_RANGE[0], FUEL_RANGE[1], py + 268, String(M.fuel));
     const atkLo = Math.min(...TANKS.map(k => k.atk)), atkHi = Math.max(...TANKS.map(k => k.atk));
-    bar('ATTACK', M.atk, atkLo, atkHi, py + 288, String(atkRating(M.atk)));
+    bar('ATTACK', M.atk, atkLo, atkHi, py + 288, String(missileHit(M.atk)));
     // colours
     text('COLOUR', px + 16, py + 312, 10, INK_DIM, 'left', '800');
     const taken = takenColors(i), sz = 24, sg = Math.min(8, (pw - 32 - 6 * sz) / 5), sx0 = px + (pw - (6 * sz + 5 * sg)) / 2;
