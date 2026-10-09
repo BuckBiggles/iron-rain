@@ -69,6 +69,7 @@ The control panel and a controls + ammo card sit in a strip below the battlefiel
 | Space | Fire |
 | Enter / E | After your shot: end your turn (or just drive until the fuel runs out) |
 | ↑ ← ↓ → or W A S D | After a hit: enter the 4 arrows shown, in order: 1.5 s, +0.25 s per right key |
+| T | Chat: type up to 30 characters, Enter sends it as a speech bubble over your tank (everyone sees it online) |
 | M / P | Mute all (music + sound effects) / pause (offline only) |
 | Armory | ←/→ tank, ↑/↓ colour, Enter ready, Tab next player (hot-seat), N map, C CPU difficulty, G mode — or click |
 | Esc | In a game, the armory or an online lobby: menu with resume, settings (music, sound effects, volume, screen shake, film grain) and leave |

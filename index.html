@@ -15,7 +15,7 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
-const BUILD = '2026-10-08.4';   // bump on every deploy: lets an open, cached copy of the game notice an update
+const BUILD = '2026-10-08.5';   // bump on every deploy: lets an open, cached copy of the game notice an update
 const cv = document.getElementById('c');
 let ctx = cv.getContext('2d', {alpha: false});   // opaque: every frame paints the whole canvas, so the browser can skip blending it
 // The battlefield ("world") is 2x the 1120x630 interface layout. The canvas renders at world resolution; HUD and menu
@@ -977,6 +977,53 @@ function explosionFx(x, y, r, color) {
   sfx.boom(r);
 }
 function popup(x, y, s, color, size = 22) { popups.push({x, y, s, color, size, life: 55, max: 55}); }
+// ---- chat: T opens a one-line box, Enter sends; the message pops up as a speech bubble over the tank that said it
+const CHAT_MAX = 30, CHAT_FRAMES = 300;   // 30 characters, on screen for 5 s
+let chatOpen = false, chatBuf = '', chats = [], chatLast = -1e9;
+const cleanChat = s => String(s || '').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, CHAT_MAX).trim();
+function chatSeat() {   // who's talking from this machine: your seat online; offline the human whose turn it is, else player 1
+  if (net) return net.seat;
+  const t = tanks[turn]; return t && !t.ai ? turn : Math.max(0, tanks.findIndex(q => !q.ai));
+}
+function openChat() { chatOpen = true; chatBuf = ''; for (const k in keys) keys[k] = false; }   // let go of any held drive/aim keys
+function sendChat() {
+  const s = cleanChat(chatBuf); chatOpen = false; chatBuf = '';
+  if (!s || performance.now() - chatLast < 800) return;
+  chatLast = performance.now();
+  if (net && net.role === 'client') { if (net.conn && net.conn.open) net.conn.send({t: 'chat', s}); }
+  else emit({t: 'say', i: chatSeat(), s});
+}
+function chatKey(e, k) {   // typing in the chat box: every key goes here until Enter or Esc
+  e.preventDefault();
+  if (k === 'enter') sendChat();
+  else if (k === 'escape') { chatOpen = false; chatBuf = ''; }
+  else if (k === 'backspace') chatBuf = chatBuf.slice(0, -1);
+  else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && chatBuf.length < CHAT_MAX) chatBuf += e.key;
+}
+function drawChats() {   // world space, after everything else so the bubbles stay readable
+  ctx.save();
+  for (let i = 0; i < chats.length; i++) {
+    const c = chats[i], t = tanks[i]; if (!c || !t) continue;
+    const age = T - c.born; if (age > CHAT_FRAMES) { chats[i] = null; continue; }
+    ctx.globalAlpha = Math.max(0, Math.min(1, age / 6, (CHAT_FRAMES - age) / 30));
+    ctx.font = `800 22px ${FONT}`;
+    const w = ctx.measureText(c.s).width + 28, h = 38, x = clamp(t.x, w / 2 + 6, WW - w / 2 - 6);
+    const y = Math.max(h + 6, t.y - 86 - Math.max(0, 6 - age) * 2), tx = clamp(t.x, x - w / 2 + 16, x + w / 2 - 16);
+    ctx.fillStyle = 'rgba(0,0,0,.28)'; rr(x - w / 2 + 3, y - h + 4, w, h, 12); ctx.fill();          // soft drop shadow
+    rr(x - w / 2, y - h, w, h, 12); ctx.fillStyle = '#f4efdc'; ctx.fill(); ctx.strokeStyle = t.color; ctx.lineWidth = 3; ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(tx - 9, y - 1.5); ctx.lineTo(tx, y + 14); ctx.lineTo(tx + 9, y - 1.5); ctx.fill();   // the tail, pointing at the tank
+    ctx.beginPath(); ctx.moveTo(tx - 9, y); ctx.lineTo(tx, y + 14); ctx.lineTo(tx + 9, y); ctx.stroke();
+    text(c.s, x, y - h / 2 + 1, 22, '#1d1a10', 'center', '800');
+  }
+  ctx.restore();
+}
+function drawChatBox() {   // the input line, just above the control panel
+  const w = 540, h = 34, x = W / 2 - w / 2, y = H - h - 14, t = tanks[chatSeat()];
+  panel(x, y, w, h, 10, t ? t.color : '#d4a417', 2);
+  text('SAY:', x + 14, y + h / 2 + 1, 12, '#d4a417', 'left', '900');
+  text(chatBuf + (T % 40 < 20 ? '_' : ' '), x + 54, y + h / 2 + 1, 14, INK, 'left', '800');
+  text(`${chatBuf.length}/${CHAT_MAX} · Enter send · Esc cancel`, x + w - 12, y + h / 2 + 1, 9.5, INK_DIM, 'right', '700');
+}
 
 function updateFx() {
   T++;
@@ -1125,6 +1172,7 @@ function applyEvent(e) {
       sfx.status(); break;
     }
     case 'pop': popup(e.x, e.y, e.s, e.c, e.z); break;
+    case 'say': chats[e.i] = {s: cleanChat(e.s), born: T}; sfx.tick(); break;   // a chat message: speech bubble over that tank
     case 'conf': confetti(e.x, e.y, e.n, e.sp); break;
     case 'sfx': sfx[e.n] && sfx[e.n](); break;
     case 'drill': {   // drill biting into (or bursting out of) the ground
@@ -1962,6 +2010,10 @@ function hostData(conn, d) {
   if (c) c.seen = performance.now();
   if (c && d && d.t === 'pick' && mode === 'armory') { armoryChange(c.seat, d); if (Number.isInteger(d.seq) && loadout[c.seat]) loadout[c.seat].seq = d.seq; bcastArmory(); return; }
   if (!c || mode !== 'play' || !d) return;
+  if (d.t === 'chat' && typeof d.s === 'string') {   // a player's chat line: pass it on to everyone (no more than one every 0.7 s each)
+    if (performance.now() - (c.chatAt || 0) > 700) { c.chatAt = performance.now(); const s = cleanChat(d.s); if (s) emit({t: 'say', i: c.seat, s}); }
+    return;
+  }
   const t = tanks[c.seat];
   if (d.t === 'qk' && t && !t.ai && state === 'quick' && turn === c.seat && typeof d.k === 'string') qteKey(d.k.slice(0, 1).toLowerCase());
   const aiming = state === 'aim', moving = state === 'move', frozen = t && t.status && t.status.id === 'frozen';
@@ -2583,6 +2635,7 @@ function drawWorld(actors) {
   }
   ctx.drawImage(vigCanvas, 0, 0);
   if (whiteFlash > .02) { ctx.fillStyle = `rgba(255,255,255,${whiteFlash})`; ctx.fillRect(0, 0, WW, WH); }
+  if (mode === 'play') drawChats();
 }
 
 // ====================================================== drawing: HUD
@@ -2775,7 +2828,7 @@ function drawInfoCard() {
   const x = 20, y = H + 98, w = W - 40, h = 48;
   panel(x, y, w, h, 10);
   // controls (two rows of key chips)
-  const rows = [[['← →', 'Aim'], ['↑ ↓', 'Power'], ['Shift', 'Fine'], ['A D', 'Drive'], ['1-4', 'Weapon'], ['Space', 'Fire']],
+  const rows = [[['← →', 'Aim'], ['↑ ↓', 'Power'], ['Shift', 'Fine'], ['A D', 'Drive'], ['1-4', 'Weapon'], ['Space', 'Fire'], ['T', 'Chat']],
                 [['↑ ← ↓ →', 'Auth code'], ['Q', 'Supply'], ['E', 'End turn'], ['M', muted && !settings.music ? 'Sound off' : 'Mute all'], net ? null : ['P', 'Pause'], ['Esc', net ? 'Leave' : 'Menu']].filter(Boolean)];
   rows.forEach((row, r) => {
     let cx = x + 12; const cy = y + 14 + r * 20;
@@ -3897,6 +3950,7 @@ function draw() {
       text('PAUSED', W / 2, H / 2 - 10, 60, '#fff', 'center', '900', 'rgba(0,0,0,.6)');
       text('press P to resume', W / 2, H / 2 + 40, 16, 'rgba(255,255,255,.7)', 'center', '700');
     }
+    if (chatOpen) drawChatBox();
     drawUIParts();
     cv.style.cursor = 'default';
     if (pauseMenu) { uiButtons = []; drawPauseMenu(); }   // Esc menu: on top of everything, and the only thing clickable
@@ -3987,6 +4041,7 @@ function initMenuScene() {
 // ====================================================== input
 addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
+  if (chatOpen) { if (mode === 'play') { chatKey(e, k); return; } chatOpen = false; }   // typing a chat message: keys don't drive the tank
   keys[k] = true; audio();
   if (infoPopup && (k === 'escape' || k === 'enter' || k === ' ')) { infoPopup = null; e.preventDefault(); return; }   // close the ammo popup
   if (net && net.re) { if (k === 'escape') leaveRoom('Stopped reconnecting.'); else if (k === 'm') muteAll(); return; }   // nothing else works until we're back in
@@ -4053,6 +4108,7 @@ addEventListener('keydown', e => {
   }
   if (k === 'escape') { togglePauseMenu(); return; }   // a menu with settings, not an instant quit
   if (pauseMenu) { if (k === 'enter') togglePauseMenu(); return; }   // the game's own keys are off while it's open
+  if (k === 't' && !e.repeat && tanks.length) { e.preventDefault(); openChat(); return; }   // chat
   if (campaign && state === 'over') {   // won: ENTER back to the board (next mission picked) · lost: ENTER retries · R replays either way
     if (k === 'enter') { if (campResult && campResult.won) leaveMission(true); else startRound(); return; }
     if (k === 'r') { startRound(); return; }
